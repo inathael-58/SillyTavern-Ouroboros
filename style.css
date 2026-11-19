@@ -1,0 +1,336 @@
+/* Ouroboros — panel and settings.
+   Colors come from theme-palette.js (--ouro-p-*), with the theme's own variables as a fallback
+   until the palette has been computed. One accent; greys from fg/muted/line only. */
+
+:root {   /* actions are pills, cards 12, controls 8, tags 4 */
+    --ouro-r-pill: 999px;
+    --ouro-r-card: 12px;
+    --ouro-r-ctl: 8px;
+    --ouro-r-tag: 4px;
+    --ouro-ease: cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+#ouro_overlay {
+    --ouro-bg: var(--ouro-p-surface, var(--SmartThemeBlurTintColor));
+    --ouro-bg2: var(--ouro-p-surface2, var(--black30a));
+    --ouro-fg: var(--ouro-p-fg, var(--SmartThemeBodyColor));
+    --ouro-muted: var(--ouro-p-muted, var(--SmartThemeBodyColor));
+    --ouro-line: var(--ouro-p-line, var(--SmartThemeBorderColor));
+    --ouro-accent: var(--ouro-p-accent, var(--SmartThemeQuoteColor));
+    --ouro-accent-text: var(--ouro-p-accent-text, var(--SmartThemeQuoteColor));
+    --ouro-accent-soft: var(--ouro-p-accent-soft, transparent);
+    --ouro-on-accent: var(--ouro-p-on-accent, var(--SmartThemeBodyColor));
+    --ouro-danger: var(--ouro-p-danger, var(--SmartThemeQuoteColor));
+    --ouro-warn: var(--ouro-p-warn, var(--SmartThemeQuoteColor));
+
+    position: fixed;
+    left: 0;
+    right: 0;
+    top: 0;
+    height: 100vh;
+    height: 100dvh;
+    z-index: 10050;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--ouro-fg);
+    font-size: var(--mainFontSize, 15px);
+    overflow-wrap: anywhere;
+}
+#ouro_overlay.ouro-hidden { display: none; }
+
+.ouro-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    opacity: 0;
+    transition: opacity var(--animation-duration, 200ms) var(--ouro-ease);
+}
+.ouro-frame {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: min(620px, 100vw);
+    height: min(860px, 100dvh);
+    max-height: 100dvh;
+    background: var(--ouro-bg);
+    border: 1px solid var(--ouro-line);
+    border-radius: var(--ouro-r-card);
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+    overflow: hidden;
+    opacity: 0;
+    transform: scale(0.95);
+    transition: opacity var(--animation-duration, 200ms) var(--ouro-ease), transform var(--animation-duration, 200ms) var(--ouro-ease);
+}
+#ouro_overlay.ouro-in .ouro-backdrop { opacity: 1; }
+#ouro_overlay.ouro-in .ouro-frame { opacity: 1; transform: none; }
+
+@media (max-width: 640px) {
+    .ouro-frame { width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; border: 0; }
+}
+
+.ouro-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    padding-top: max(10px, env(safe-area-inset-top));
+    border-bottom: 1px solid var(--ouro-line);
+}
+.ouro-logo { color: var(--ouro-accent); font-size: 1.3em; }
+.ouro-title { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
+.ouro-title small { color: var(--ouro-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.ouro-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--ouro-line);
+}
+.ouro-tab {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 6px 4px;
+    border: 0;
+    border-radius: var(--ouro-r-ctl);
+    background: transparent;
+    color: var(--ouro-muted);
+    font: inherit;
+    font-size: 0.85em;
+    cursor: pointer;
+}
+.ouro-tab.is-on { color: var(--ouro-accent-text); background: var(--ouro-accent-soft); }
+
+.ouro-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 10px 12px;
+    padding-bottom: max(16px, env(safe-area-inset-bottom));
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.ouro-card {
+    background: var(--ouro-bg2);
+    border: 1px solid var(--ouro-line);
+    border-radius: var(--ouro-r-card);
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.ouro-card h3, .ouro-card h4 { margin: 0; font-size: 1em; display: flex; align-items: center; gap: 6px; }
+.ouro-card h3 { font-size: 1.1em; }
+.ouro-card h4 small, .ouro-fold small, .ouro-label small { color: var(--ouro-muted); font-weight: normal; }
+.ouro-hint, .ouro-meta { margin: 0; color: var(--ouro-muted); font-size: 0.85em; line-height: 1.45; }
+.ouro-error { color: var(--ouro-danger); }
+
+/* buttons */
+.ouro-btn, .ouro-icon-btn, .ouro-chip, .ouro-seg, .ouro-fold {
+    font: inherit;
+    color: var(--ouro-fg);
+    cursor: pointer;
+    transition: transform 120ms var(--ouro-ease), background-color 120ms var(--ouro-ease);
+}
+.ouro-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border: 1px solid var(--ouro-line);
+    border-radius: var(--ouro-r-pill);
+    background: var(--ouro-bg);
+}
+.ouro-btn:active, .ouro-chip:active, .ouro-seg:active, .ouro-icon-btn:active { transform: scale(0.97); }
+.ouro-btn:disabled { opacity: 0.5; cursor: default; }
+.ouro-btn.ouro-primary { background: var(--ouro-accent); border-color: var(--ouro-accent); color: var(--ouro-on-accent); }
+.ouro-btn.ouro-danger { color: var(--ouro-danger); border-color: var(--ouro-danger); }
+.ouro-btn.ouro-small { padding: 4px 10px; font-size: 0.85em; }
+.ouro-btn.ouro-wide { width: 100%; }
+.ouro-btn.is-armed, .ouro-icon-btn.is-armed { border-color: var(--ouro-warn); color: var(--ouro-warn); }
+.ouro-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 34px;
+    height: 34px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--ouro-r-pill);
+    background: transparent;
+    color: var(--ouro-muted);
+}
+.ouro-icon-btn.is-armed { width: auto; font-size: 0.8em; border: 1px solid; }
+
+.ouro-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ouro-chip {
+    padding: 5px 12px;
+    border: 1px solid var(--ouro-line);
+    border-radius: var(--ouro-r-pill);
+    background: var(--ouro-bg);
+    font-size: 0.9em;
+}
+.ouro-chip.is-on { background: var(--ouro-accent); border-color: var(--ouro-accent); color: var(--ouro-on-accent); }
+
+.ouro-segs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+@media (max-width: 420px) { .ouro-segs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.ouro-seg {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 6px;
+    border: 1px solid var(--ouro-line);
+    border-radius: var(--ouro-r-ctl);
+    background: var(--ouro-bg);
+    text-align: center;
+}
+.ouro-seg small { color: var(--ouro-muted); font-size: 0.75em; }
+.ouro-seg.is-on { border-color: var(--ouro-accent); background: var(--ouro-accent-soft); }
+.ouro-seg.is-on b { color: var(--ouro-accent-text); }
+
+.ouro-fold {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    font-weight: bold;
+    text-align: left;
+}
+.ouro-fold .fa-chevron-right { transition: transform var(--animation-duration, 150ms) var(--ouro-ease); color: var(--ouro-muted); }
+.ouro-fold.is-open .fa-chevron-right { transform: rotate(90deg); }
+
+.ouro-label { font-size: 0.9em; font-weight: bold; }
+.ouro-trope-cat { display: flex; flex-direction: column; gap: 4px; }
+.ouro-trope-cat > small { color: var(--ouro-muted); }
+
+/* inputs */
+#ouro_overlay .ouro-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    border: 1px solid var(--ouro-line);
+    border-radius: var(--ouro-r-ctl);
+    background: var(--ouro-bg);
+    color: var(--ouro-fg);
+    font: inherit;
+    font-size: max(16px, 1em); /* no auto-zoom on iPhone */
+    margin: 0;
+}
+#ouro_overlay .ouro-input::placeholder { color: var(--ouro-muted); opacity: 1; }
+#ouro_overlay textarea.ouro-input { resize: vertical; }
+.ouro-row { display: flex; align-items: center; gap: 8px; }
+.ouro-row > .ouro-input { flex: 1 1 0; width: 0; min-width: 0; }
+.ouro-row > .ouro-btn { flex: 0 0 auto; }
+.ouro-size-row > span { flex: 1 1 0; min-width: 0; }
+.ouro-size-row > select.ouro-input { flex: 1.5 1 0; }
+.ouro-check { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.ouro-check span { display: flex; flex-direction: column; }
+.ouro-check small { color: var(--ouro-muted); }
+
+/* home */
+.ouro-hero { flex-direction: row; align-items: center; gap: 14px; }
+.ouro-ring { flex: 0 0 auto; width: 128px; height: 128px; }
+.ouro-seg-arc { fill: none; stroke: var(--ouro-line); stroke-width: 9; stroke-linecap: round; }
+.ouro-seg-arc.is-past { stroke: var(--ouro-accent); opacity: 0.55; }
+.ouro-seg-arc.is-now { stroke: var(--ouro-accent); }
+.ouro-ring-phase { fill: var(--ouro-fg); font-size: 14px; font-weight: bold; text-anchor: middle; }
+.ouro-ring-pct { fill: var(--ouro-muted); font-size: 12px; text-anchor: middle; }
+.ouro-stats { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ouro-stats small { color: var(--ouro-muted); }
+.ouro-stats b { color: var(--ouro-accent-text); }
+.ouro-peeked { color: var(--ouro-warn); font-size: 0.9em; }
+@media (max-width: 380px) { .ouro-hero { flex-direction: column; align-items: flex-start; } }
+
+.ouro-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.ouro-status { margin: 0; display: flex; align-items: center; gap: 8px; color: var(--ouro-muted); font-size: 0.9em; padding: 0 4px; }
+.ouro-status.is-error { color: var(--ouro-danger); flex-wrap: wrap; }
+.ouro-status.is-error span { flex: 1 1 200px; min-width: 0; }
+.ouro-banner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--ouro-accent);
+    border-radius: var(--ouro-r-card);
+    background: var(--ouro-accent-soft);
+}
+.ouro-banner > span { flex: 1 1 180px; min-width: 0; }
+.ouro-danger-zone { border-style: dashed; align-items: flex-start; }
+.ouro-warn-card { flex-direction: row; align-items: center; flex-wrap: wrap; gap: 8px; border-color: var(--ouro-warn); }
+.ouro-warn-card > span { flex: 1 1 200px; min-width: 0; font-size: 0.9em; }
+.ouro-warn-card > .fa-mask { color: var(--ouro-warn); }
+
+/* seeds */
+.ouro-seeds { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.ouro-seed { display: flex; align-items: flex-start; gap: 8px; padding: 8px 0; border-top: 1px solid var(--ouro-line); }
+.ouro-seed:first-child { border-top: 0; }
+.ouro-seed.is-editing { flex-direction: column; align-items: stretch; }
+.ouro-seed.is-paid .ouro-seed-main > span { color: var(--ouro-muted); text-decoration: line-through; }
+.ouro-seed-ic { color: var(--ouro-accent); width: 20px; text-align: center; padding-top: 2px; }
+.ouro-seed-main { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ouro-seed-main small { color: var(--ouro-muted); font-size: 0.8em; }
+
+/* fates */
+.ouro-fate {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px;
+    border: 1px solid var(--ouro-line);
+    border-radius: var(--ouro-r-ctl);
+    background: var(--ouro-bg);
+}
+.ouro-fate header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ouro-badge { font-size: 0.75em; padding: 1px 8px; border-radius: var(--ouro-r-tag); border: 1px solid var(--ouro-line); color: var(--ouro-muted); }
+.ouro-badge.is-lock { border-color: var(--ouro-accent); color: var(--ouro-accent-text); }
+.ouro-scent { margin: 0; font-weight: bold; color: var(--ouro-accent-text); }
+.ouro-shadow { margin: 0; font-style: italic; }
+.ouro-full { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 4px 10px; font-size: 0.92em; }
+.ouro-full dt { color: var(--ouro-muted); }
+.ouro-full dd { margin: 0; }
+.ouro-full ul { margin: 0; padding-left: 1.1em; }
+.ouro-peek-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.ouro-peek-done { font-size: 0.8em; color: var(--ouro-muted); }
+
+.ouro-empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 6px; padding: 18px 8px; color: var(--ouro-muted); }
+.ouro-empty b { color: var(--ouro-fg); }
+.ouro-empty p { margin: 0; font-size: 0.9em; }
+.ouro-empty-ic { font-size: 1.6em; color: var(--ouro-accent); }
+
+/* settings drawer (shared column: never wider than it) */
+.ouro-settings { contain: inline-size; max-width: 100%; overflow-wrap: anywhere; }
+.ouro-settings .ouro-ver { color: var(--SmartThemeBodyColor); opacity: 0.7; font-weight: normal; }
+.ouro-settings h5 { margin: 10px 0 4px; }
+.ouro-set-row { display: flex; align-items: center; gap: 0.5em; margin: 4px 0; }
+.ouro-set-row > span { flex: 1 1 0; min-width: 0; }
+.ouro-set-row > select, .ouro-set-row > input { flex: 1.5 1 0; width: 0; min-width: 0; margin: 0; }
+.ouro-set-hint { display: block; opacity: 0.75; margin-bottom: 6px; line-height: 1.4; }
+.ouro-set-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.ouro-settings .menu_button { gap: 6px; }
+.ouro-set-status { margin: 8px 0 4px; overflow-wrap: anywhere; }
+.ouro-set-adv summary { cursor: pointer; margin: 6px 0; }
+.ouro-set-label { display: block; margin-top: 6px; }
+#ouro_template { width: 100%; box-sizing: border-box; font-family: var(--monoFontFamily, monospace); font-size: 0.85em; }
+#ouro_diag_box textarea { width: 100%; box-sizing: border-box; font-family: var(--monoFontFamily, monospace); font-size: 0.8em; }
+
+/* readable inputs inside our panels on light themes */
+html.ouro-pal :where(#ouro_settings) :is(.text_pole, textarea, select, input:is([type="text"], [type="number"], :not([type]))) {
+    background-color: var(--ouro-p-surface2);
+    color: var(--ouro-p-fg);
+    border-color: var(--ouro-p-line);
+}
+
+body.reduced-motion #ouro_overlay *, body.reduced-motion #ouro_overlay { animation: none !important; }
+@media (prefers-reduced-motion: reduce) {
+    #ouro_overlay, #ouro_overlay * { animation: none !important; }
+}
