@@ -334,3 +334,44 @@ body.reduced-motion #ouro_overlay *, body.reduced-motion #ouro_overlay { animati
 @media (prefers-reduced-motion: reduce) {
     #ouro_overlay, #ouro_overlay * { animation: none !important; }
 }
+
+/* floating button: may stay see-through like other launchers; Quick Dock can take it in */
+#ouro_launcher {
+    position: fixed;
+    z-index: 10040;
+    width: 46px;
+    height: 46px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--ouro-r-pill);
+    border: 1px solid var(--SmartThemeBorderColor);
+    background: var(--SmartThemeBlurTintColor);
+    backdrop-filter: blur(var(--SmartThemeBlurStrength, 8px));
+    -webkit-backdrop-filter: blur(var(--SmartThemeBlurStrength, 8px));
+    color: var(--SmartThemeQuoteColor);
+    font-size: 20px;
+    cursor: pointer;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+    transition: scale 120ms var(--ouro-ease);
+}
+#ouro_launcher:active { scale: 0.96; }
+#ouro_launcher.ouro-dragging { transition: none; cursor: grabbing; scale: 1.08; }
+#ouro_launcher[data-state="busy"] i { animation: ouro-spin 1.6s linear infinite; } /* loops only while a job runs */
+#ouro_launcher[data-state="attention"]::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 9px;
+    height: 9px;
+    border-radius: var(--ouro-r-pill);
+    background: var(--ouro-p-danger, var(--SmartThemeQuoteColor));
+}
+@keyframes ouro-spin { to { rotate: 360deg; } }
+body.reduced-motion #ouro_launcher i { animation: none !important; }
+@media (prefers-reduced-motion: reduce) { #ouro_launcher i { animation: none !important; } }

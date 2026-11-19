@@ -156,7 +156,7 @@ export function countBotSince(chat, after = -1) {
  */
 export function progressOf(st, chat) {
     const size = sizeOf(st.size);
-    const count = countVisible(chat, st.startedAt);
+    const count = countVisible(chat, st.startedAt) + (Number(st.offset) || 0);
     const floor = Number(st.progressFloor) || 0;
     if (!size.arcs) {
         const main = Math.max(count / size.target, floor);
@@ -164,7 +164,7 @@ export function progressOf(st, chat) {
         return { main, arc: null, mainPhase: ph, arcPhase: null, phase: ph, arcLen: null, done: main >= 1 };
     }
     const arcLen = size.arcs === Infinity ? size.target : Math.round(size.target / size.arcs);
-    let arc = Math.max(countVisible(chat, st.arc.startedAt) / arcLen, st.arcFloor || 0);
+    let arc = Math.max((countVisible(chat, st.arc.startedAt) + (Number(st.arc.offset) || 0)) / arcLen, st.arcFloor || 0);
     let main;
     let mainPhase;
     if (size.arcs === Infinity) {
@@ -219,7 +219,7 @@ export function spawnRoom(st, prog, layer) {
 
 /** Is the message (and swipe) that produced this still the one on screen? */
 export function onScreen(chat, ref) {
-    if (!ref || !Number.isInteger(ref.msgId)) return true; // added by the user
+    if (!ref || !Number.isInteger(ref.msgId)) return true; // added by the user, or carried from an earlier chat
     const m = chat?.[ref.msgId];
     if (!m) return false;
     const cur = Number.isInteger(m.swipe_id) ? m.swipe_id : 0;
@@ -550,6 +550,18 @@ export function pickFocus(st, chat, prog, max = 3) {
     return out;
 }
 
+/** Locked truths split into those still held back and those the climax may release. */
+export function secretsByTiming(st, prog) {
+    const hold = [];
+    const free = [];
+    for (const sec of st.secrets ?? []) {
+        if (!lockedFate(st, sec.layer)) continue; // nothing is true until its layer is locked
+        const ph = sec.layer === 'arc' ? prog.arcPhase : prog.mainPhase;
+        (phaseIndex(ph) >= phaseIndex('climax') ? free : hold).push(sec.text);
+    }
+    return { hold, free };
+}
+
 /** The text injected into the chat for the story writer. Empty string = nothing to send. */
 export function buildInjection(st, chat, template = DEFAULT_TEMPLATE) {
     if (!st || st.ended) return '';
@@ -562,13 +574,7 @@ export function buildInjection(st, chat, template = DEFAULT_TEMPLATE) {
     const beat = st.beat ? `Next beat: ${st.beat}` : '';
     const focus = pickFocus(st, chat, prog);
     const seeds = focus.length ? `Threads worth picking up (weave them in subtly, no exposition):\n${focus.map(s => `- ${s.text}`).join('\n')}` : '';
-    const hold = [];
-    const free = [];
-    for (const sec of st.secrets ?? []) {
-        if (!lockedFate(st, sec.layer)) continue; // nothing is true until its layer is locked
-        const ph = sec.layer === 'arc' ? prog.arcPhase : prog.mainPhase;
-        (phaseIndex(ph) >= phaseIndex('climax') ? free : hold).push(sec.text);
-    }
+    const { hold, free } = secretsByTiming(st, prog);
     const secrets = [
         hold.length ? `Do not reveal yet (hint at most):\n${hold.map(s => `- ${s}`).join('\n')}` : '',
         free.length ? `Truths that may now come out, at the right dramatic moment:\n${free.map(s => `- ${s}`).join('\n')}` : '',
@@ -638,4 +644,40 @@ export function stats(st, chat) {
         unrealized: st.fates.filter(f => f.status === 'pruned').length,
         peeked: st.fates.some(f => f.peek > 0) || (st.secretTropes?.peek ?? 0) > 0,
     };
+}
+
+// ---------------------------------------------------------------- carry a plan into a continued chat (Memory Hub chain)
+
+/**
+ * The plan of the previous chapter, continued in a new chat. Message numbers of the old chat
+ * mean nothing here, so seeds become chat-less (always on screen), progress carries over as an
+ * offset, and old lock/prune positions are kept only for display.
+ * @param {object} prev the previous chat's state
+ * @param {any[]} prevChat the previous chat's messages (only counted)
+ * @param {{chatId:string, groupId?:string|null, from:string}} o
+ */
+export function carryState(prev, prevChat, o) {
+    const st = normalizeState(structuredClone(prev));
+    const visibleMain = countVisible(prevChat, st.startedAt) + (Number(st.offset) || 0);
+    const visibleArc = countVisible(prevChat, st.arc.startedAt) + (Number(st.arc.offset) || 0);
+    st.owner = { chatId: o.chatId, groupId: o.groupId ?? null };
+    st.carriedFrom = [...(st.carriedFrom ?? []), o.from];
+    st.offset = visibleMain;
+    st.startedAt = 0;
+    st.arc = { ...st.arc, startedAt: 0, offset: visibleArc };
+    st.seeds = st.seeds
+        .filter(s => s.status !== 'dropped' && onScreen(prevChat, s))
+        .map(s => {
+            const paid = s.status === 'paid' && onScreen(prevChat, s.paidBy);
+            return { ...s, msgId: null, swipeId: 0, carried: true, status: paid ? 'paid' : 'open', paidBy: paid ? { carried: true } : null };
+        });
+    for (const f of st.fates) {
+        if (Number.isInteger(f.lockedAt)) f.lockedAt = 0;
+        if (Number.isInteger(f.prunedAt)) { f.prunedIn = o.from; }
+    }
+    st.scanned = [];
+    st.lastArchitectAt = -1;
+    st.lastScoutAt = -1;
+    st.history.push({ at: 0, event: 'carried', from: o.from });
+    return st;
 }

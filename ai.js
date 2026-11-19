@@ -20,6 +20,28 @@ function resolve(id) {
     return profiles().some(p => p.id === id) ? id : 'main';
 }
 
+// ---------------------------------------------------------------- usage today (this device)
+
+const USAGE_KEY = 'ouroboros_usage';
+const today = () => new Date().toLocaleDateString('sv'); // YYYY-MM-DD, local time
+/** @returns {{date:string, roles:Record<string,{calls:number, fails:number, inChars:number, outChars:number}>}} */
+export function usageToday() {
+    try {
+        const u = JSON.parse(localStorage.getItem(USAGE_KEY) ?? 'null');
+        if (u && u.date === today() && u.roles) return u;
+    } catch { /* ignore */ }
+    return { date: today(), roles: {} };
+}
+function countUsage(role, inChars, outChars, failed) {
+    const u = usageToday();
+    const r = u.roles[role] ??= { calls: 0, fails: 0, inChars: 0, outChars: 0 };
+    r.calls++;
+    if (failed) r.fails++;
+    r.inChars += inChars;
+    r.outChars += outChars;
+    try { localStorage.setItem(USAGE_KEY, JSON.stringify(u)); } catch { /* ignore */ }
+}
+
 async function callOne(src, messages, maxTokens, timeoutMs, signal) {
     const c = ctx();
     if (signal?.aborted) throw new Error('หยุดแล้ว');
@@ -53,18 +75,23 @@ async function callOne(src, messages, maxTokens, timeoutMs, signal) {
  * @param {{source:string, system:string, user:string, maxTokens:number, timeoutSec:number, accept:(out:string)=>T, signal?:AbortSignal}} o
  * @returns {Promise<{value:T, label:string, ms:number}>}
  */
-export async function ask({ source, system, user, maxTokens, timeoutSec, accept, signal }) {
+export async function ask({ role = 'other', source, system, user, maxTokens, timeoutSec, accept, signal }) {
     const src = resolve(source);
     const label = sourceLabel(src);
     const messages = [{ role: 'system', content: system }, { role: 'user', content: user }];
     let lastErr;
     for (let attempt = 0; attempt < 2; attempt++) {
         const t0 = Date.now();
+        const inChars = system.length + user.length;
+        let out = '';
         try {
-            const out = String(await callOne(src, messages, maxTokens, timeoutSec * 1000, signal) ?? '');
-            if (!out.trim()) throw new Error('ได้คำตอบว่าง (อาจโดน safety filter หรือโควต้าหมด)');
-            return { value: accept(out), label, ms: Date.now() - t0 };
+            out = String(await callOne(src, messages, maxTokens, timeoutSec * 1000, signal) ?? '');
+            if (!out.trim()) throw new Error('ได้คำตอบว่าง (อาจโดน safety filter, โควต้าหมด หรือโมเดลคิดจนหมดโควต้าคำตอบ)');
+            const value = accept(out);
+            countUsage(role, inChars, out.length, false);
+            return { value, label, ms: Date.now() - t0 };
         } catch (e) {
+            countUsage(role, inChars, out.length, true);
             if (signal?.aborted) throw new Error('หยุดแล้ว');
             console.warn(LOG, `${label} attempt ${attempt + 1} failed`, e);
             lastErr = e;

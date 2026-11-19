@@ -8,13 +8,13 @@ import { ask } from './ai.js';
 import {
     SIZES, sizeOf, PHASES, phaseInfo, progressOf, lockPoint, layerProgress, layers, alive, lockedFate, spawnRoom,
     liveSeeds, addSeeds, paySeeds, trimToChat, applyArchitect, advanceArc, countBotSince, recentTranscript,
-    cleanMessage, parseJsonLoose, SEED_KINDS,
+    cleanMessage, parseJsonLoose, SEED_KINDS, secretsByTiming,
 } from './lib.js';
 
 const LOG = '[Ouroboros]';
 const ctx = () => SillyTavern.getContext();
 
-/** @type {{settings:()=>any, state:()=>any, save:()=>void, changed:()=>void, generating:()=>boolean, chatId:()=>string, diag:(m:string)=>void}} */
+/** @type {{settings:()=>any, state:()=>any, save:()=>void, changed:()=>void, generating:()=>boolean, chatId:()=>string, diag:(m:string)=>void, onLeak:(info:{msgId:number, swipeId:number, chatId:string})=>void}} */
 let host;
 export const status = { busy: null, lastOk: null, lastError: null, queued: [] };
 
@@ -128,17 +128,21 @@ async function runScout() {
     const from = Math.max(0, targets[0] - 1);
     const transcript = recentTranscript(chat, 6000, targets[targets.length - 1] + 1).split('\n\n').filter(l => Number(l.match(/^#(\d+)/)?.[1]) >= from).join('\n\n');
     const kinds = Object.keys(SEED_KINDS).join('|');
+    const last = targets[targets.length - 1];
+    // leak check rides along in the same call: no extra request
+    const held = s.leakAction !== 'off' ? secretsByTiming(st, prog).hold : [];
     const user = [
         open.length ? `OPEN THREADS ALREADY NOTED (id: text):\n${open.map(x => `${x.id}: ${x.text}`).join('\n')}` : 'OPEN THREADS ALREADY NOTED: none',
+        held.length ? `HIDDEN TRUTHS THE STORY MUST NOT REVEAL YET (numbered):\n${held.map((t, i) => `${i + 1}. ${t}`).join('\n')}` : '',
         `LATEST STORY TEXT:\n${transcript}`,
         `TASK:
 1. List up to 3 NEW loose threads introduced in messages ${targets.map(i => '#' + i).join(', ')}. Skip atmosphere, trivia, and anything already noted above. Each "text" is one short concrete sentence (at most ~20 words), no interpretation. "msg" is the message number it appeared in.
 2. List the ids of noted threads that these messages clearly resolved or paid off.
-${storyLanguageHint()}
+${held.length ? `3. "leaked": the numbers of hidden truths that message #${last} states outright or makes unmistakable (hints and foreshadowing are fine and do NOT count).\n` : ''}${storyLanguageHint()}
 Answer with JSON only:
-{"new":[{"text":"…","kind":"${kinds}","msg":${targets[targets.length - 1]}}],"paid":["s1"]}
-If nothing qualifies: {"new":[],"paid":[]}`,
-    ].join('\n\n');
+{"new":[{"text":"…","kind":"${kinds}","msg":${last}}],"paid":["s1"]${held.length ? ',"leaked":[]' : ''}}
+If nothing qualifies: {"new":[],"paid":[]${held.length ? ',"leaked":[]' : ''}}`,
+    ].filter(Boolean).join('\n\n');
 
     const { value } = await ask({
         source: s.scoutSource, system: SCOUT_SYSTEM, user,
@@ -146,13 +150,13 @@ If nothing qualifies: {"new":[],"paid":[]}`,
         accept: out => {
             const j = parseJsonLoose(out);
             if (!j || typeof j !== 'object') throw new Error('ผู้เก็บปมตอบไม่เป็น JSON');
-            return { new: Array.isArray(j.new) ? j.new : [], paid: Array.isArray(j.paid) ? j.paid : [] };
+            return { new: Array.isArray(j.new) ? j.new : [], paid: Array.isArray(j.paid) ? j.paid : [], leaked: Array.isArray(j.leaked) ? j.leaked : [] };
         },
+        role: 'scout',
     });
     if (host.chatId() !== chatId) return;
     const st2 = host.state();
     if (st2 !== st) return;
-    const last = targets[targets.length - 1];
     for (const it of value.new.slice(0, 3)) {
         const msgId = targets.includes(Number(it?.msg)) ? Number(it.msg) : last;
         addSeeds(st, [it], { msgId, swipeId: chat[msgId]?.swipe_id ?? 0 }, prog.phase);
@@ -163,6 +167,12 @@ If nothing qualifies: {"new":[],"paid":[]}`,
     st.lastScoutAt = last;
     status.lastOk = { kind: 'scout', at: Date.now() };
     host.save();
+    const leaked = value.leaked.map(Number).filter(n => n >= 1 && n <= held.length);
+    if (leaked.length) {
+        st.leaks = [...(st.leaks ?? []), { msgId: last, swipeId: chat[last]?.swipe_id ?? 0, at: Date.now() }].slice(-20);
+        host.diag(`leak suspected at #${last}`);
+        host.onLeak({ msgId: last, swipeId: chat[last]?.swipe_id ?? 0, chatId });
+    }
 }
 
 // ---------------------------------------------------------------- Architect
@@ -290,6 +300,7 @@ async function runArchitect(reason) {
             if (needBirth && !(Array.isArray(j.fates) && j.fates.some(f => f?.truth))) throw new Error('ผู้ทอชะตาไม่ได้เขียนชะตา');
             return j;
         },
+        role: 'architect',
     });
     if (host.chatId() !== chatId || host.state() !== st) return;
     const res = applyArchitect(st, value, { at, prog });
