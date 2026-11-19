@@ -384,3 +384,5 @@ body.reduced-motion #ouro_launcher i { animation: none !important; }
 .ouro-secret p { margin: 0; }
 .ouro-secret small { color: var(--ouro-muted); font-size: 0.8em; }
 .ouro-secret.is-out { border-left-color: var(--ouro-line); }
+.ouro-segs.ouro-segs-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 420px) { .ouro-segs.ouro-segs-3 { grid-template-columns: minmax(0, 1fr); } }

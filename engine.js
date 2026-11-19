@@ -9,7 +9,7 @@ import {
     SIZES, sizeOf, PHASES, phaseInfo, progressOf, lockPoint, layerProgress, layers, alive, lockedFate, spawnRoom,
     liveSeeds, addSeeds, paySeeds, trimToChat, applyArchitect, advanceArc, countBotSince, recentTranscript,
     cleanMessage, parseJsonLoose, SEED_KINDS, secretsByTiming, backfillPlan, backfillUntil, backfillRef,
-    applyScoutSecrets, activeSecrets,
+    applyScoutSecrets, activeSecrets, intensityOf, tonesFor, sameToneBirth, TONES,
 } from './lib.js';
 
 const LOG = '[Ouroboros]';
@@ -168,7 +168,7 @@ If nothing qualifies: {"new":[],"paid":[]${S ? ',"clues":[],"learned":[],"reveal
     ].filter(Boolean).join('\n\n');
 
     const { value } = await ask({
-        source: s.scoutSource, system: SCOUT_SYSTEM, user,
+        source: s.scoutSource, backup: s.scoutBackup, system: SCOUT_SYSTEM, user,
         maxTokens: s.scoutMaxTokens, timeoutSec: s.timeoutSec,
         accept: out => {
             const j = parseJsonLoose(out);
@@ -233,7 +233,7 @@ Answer with JSON only:
 {"new":[{"text":"…","kind":"${kinds}","msg":null}],"paid":[]}`,
             ].join('\n\n');
             const { value } = await ask({
-                role: 'scout', source: s.scoutSource, system: SCOUT_SYSTEM, user,
+                role: 'scout', source: s.scoutSource, backup: s.scoutBackup, system: SCOUT_SYSTEM, user,
                 maxTokens: s.scoutMaxTokens, timeoutSec: s.timeoutSec,
                 accept: out => {
                     const j = parseJsonLoose(out);
@@ -309,6 +309,8 @@ Rules:
 - The player directs their own character. Never plan the player's choices; plan the world, the other characters and the hidden truth.
 - Prefer seeds that more than one living fate can use (ambiguous clues), so every fate stays possible until the lock.
 - "beat" is one short, concrete suggestion for the next scene, written so it never gives away a truth.
+- The story writer may tend to soften things or resolve conflicts too early. If something was resolved too easily, do not mark the darker fates "contradicted" for that alone: find the price that easy win carries, or what it hid. "contradicted" means the fate can no longer be true at all.
+- This is fiction. Keep the player's chosen intensity even if your own habit is to make things nicer or wrap them up quickly.
 You answer with JSON only.`;
 
 function fateForPrompt(f) {
@@ -347,7 +349,9 @@ async function runArchitect(reason) {
         prog.done ? 'The planned length is reached: steer to a close.' : '',
     ].filter(Boolean).join('\n');
 
+    const intensity = intensityOf(st.intensity);
     const wishes = [
+        `Intensity: ${intensity.architect}`,
         st.moods?.length ? `Wished moods: ${st.moods.join(', ')}` : 'Wished moods: none given.',
         st.premise ? `Player's rough premise (an ingredient, not an order; fates may use or twist it): ${st.premise}` : '',
         st.tropes?.length ? `Tropes the player likes (ingredients): ${st.tropes.join(', ')}` : '',
@@ -364,8 +368,9 @@ async function runArchitect(reason) {
     const transcript = recentTranscript(chat, budgetChars);
 
     const tasks = [];
+    const askedTones = Object.fromEntries(lays.map(l => [l, tonesFor(st, l, room[l])]));
     for (const l of lays) {
-        if (room[l] > 0) tasks.push(`Create ${room[l]} new fate(s) for layer "${l}"${l === 'arc' ? ` (a self-contained mystery or conflict for act ${st.arc.index}, resolvable within it)` : ' (the deepest secret of the whole story)'}. Give each "id" a new letter, "layer":"${l}", "truth", up to 3 "twists", "ending", "scent" (ONE word naming its theme), "shadow" (one vague, evocative sentence that hints without revealing), "needs" (ids of seeds it would pay off) and a "score".`);
+        if (room[l] > 0) tasks.push(`Create ${room[l]} new fate(s) for layer "${l}"${l === 'arc' ? ` (a self-contained mystery or conflict for act ${st.arc.index}, resolvable within it)` : ' (the deepest secret of the whole story)'}, one per tone, in this order: ${askedTones[l].map((t, i) => `fate ${i + 1} "${t}"`).join(', ')} ("bright" = ends well, earned; "bittersweet" = a win that costs; "dark" = a real loss or a betrayal that lands). Give each "id" a new letter, "layer":"${l}", "tone", "truth", up to 3 "twists", "ending", "scent" (ONE word naming its theme), "shadow" (one vague, evocative sentence that hints without revealing), "needs" (ids of seeds it would pay off) and a "score".`);
     }
     if (live.length) tasks.push('For every living or locked fate listed, return {"id","score","contradicted","reason"} and, if useful, refined "twists"/"ending"/"needs". Do not change a locked fate\'s truth.');
     tasks.push('"seedFates": for each open seed, the fate ids that could use it.');
@@ -392,21 +397,28 @@ async function runArchitect(reason) {
         `TASK (reason for this pass: ${reason})\n${tasks.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n${storyLanguageHint()}\nAnswer with JSON only:\n{"fates":[…],"seedFates":{"s1":["A"]},"focus":["s1"],"beat":"…","pace":"keep","secrets":[],"arcSummary":""}`,
     ].filter(Boolean).join('\n\n');
 
-    const { value } = await ask({
-        source: s.architectSource, system: ARCHITECT_SYSTEM, user,
+    let toneTries = 0;
+    const { value, usedBackup } = await ask({
+        source: s.architectSource, backup: s.architectBackup, system: ARCHITECT_SYSTEM, user,
         maxTokens: s.architectMaxTokens, timeoutSec: s.timeoutSec,
         accept: out => {
             const j = parseJsonLoose(out);
             if (!j || typeof j !== 'object') throw new Error('ผู้ทอชะตาตอบไม่เป็น JSON');
             const needBirth = lays.some(l => room[l] > 0 && alive(st, l).length === 0);
             if (needBirth && !(Array.isArray(j.fates) && j.fates.some(f => f?.truth))) throw new Error('ผู้ทอชะตาไม่ได้เขียนชะตา');
+            // fates asked for different tones that all came back the same: one more try, then take what came
+            if (++toneTries < 2) for (const l of lays) {
+                const born = (Array.isArray(j.fates) ? j.fates : []).filter(f => f?.truth && (f.layer ?? lays[0]) === l && !st.fates.some(x => x.id === String(f.id ?? '') && x.status !== 'pruned'));
+                if (sameToneBirth(born, askedTones[l])) throw new Error(`ชะตาออกมาโทนเดียวกันหมด (${TONES[String(born[0].tone).toLowerCase()] ?? born[0].tone})`);
+            }
             if (reason === 'secrets' && !(Array.isArray(j.secrets) && j.secrets.some(x => x?.text || typeof x === 'string'))) throw new Error('ผู้ทอชะตาไม่ได้เขียนความลับของชะตาที่ล็อก');
             return j;
         },
         role: 'architect',
     });
     if (host.chatId() !== chatId || host.state() !== st) return;
-    const res = applyArchitect(st, value, { at, prog });
+    const res = applyArchitect(st, value, { at, prog, noRush: !!s.noRush });
+    if (usedBackup) host.diag(`architect used the backup API (${reason})`);
     const after = progressOf(st, chat);
     st.lastPhase = `${after.mainPhase}/${after.phase}`;
     st.lastWeave = { at: Date.now(), reason, added: res.added.length, pruned: res.pruned.length, locked: res.locked.length };

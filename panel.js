@@ -7,7 +7,7 @@
 import {
     SIZES, SIZE_IDS, sizeOf, PHASES, phaseIndex, phaseInfo, progressOf, stats, liveSeeds, layers, alive, lockedFate,
     lockedPastChat, unlockFate, cutThreads, newCycle, addSeeds, SEED_KINDS, normKind, TROPES, TROPE_CATEGORIES, MOODS,
-    newState, activeSecrets,
+    newState, activeSecrets, INTENSITY, INTENSITY_IDS, TONES,
 } from './lib.js';
 
 const ctx = () => SillyTavern.getContext();
@@ -132,7 +132,7 @@ const confirmBtn = (act, label, cls = '', extra = '') => `<button class="ouro-bt
 
 function renderSetup() {
     const len = chat().length;
-    const d = ui.draft ??= { size: 'medium', premise: '', tropes: [], custom: '', secretCats: [], moods: [], includeExisting: len <= 20, showPremise: false, showSecret: false, backfill: true };
+    const d = ui.draft ??= { size: 'medium', intensity: 'real', premise: '', tropes: [], custom: '', secretCats: [], moods: [], includeExisting: len <= 20, showPremise: false, showSecret: false, backfill: true };
     const est = len > 4 ? host.estimate(null) : null;
     const sizes = SIZE_IDS.map(id => `<button class="ouro-seg ${d.size === id ? 'is-on' : ''}" data-act="d-size" data-val="${id}"><b>${SIZES[id].label}</b><small>${SIZES[id].range}</small></button>`).join('');
     const tropeCats = TROPE_CATEGORIES.map(c => `<div class="ouro-trope-cat"><small>${esc(c)}</small><div class="ouro-chips">${TROPES[c].map(t => chip(d.tropes.includes(t), 'd-trope', t, t)).join('')}</div></div>`).join('');
@@ -146,6 +146,11 @@ function renderSetup() {
   <h4>ขนาดแผน</h4>
   <div class="ouro-segs">${sizes}</div>
   <p class="ouro-hint">${esc(sizeHint(d.size))}</p>
+</section>
+<section class="ouro-card">
+  <h4>ความเข้มของเรื่อง</h4>
+  <div class="ouro-segs ouro-segs-3">${INTENSITY_IDS.map(id => `<button class="ouro-seg ${d.intensity === id ? 'is-on' : ''}" data-act="d-intensity" data-val="${id}"><b>${INTENSITY[id].label}</b><small>${INTENSITY[id].hint}</small></button>`).join('')}</div>
+  <p class="ouro-hint">ชะตาแต่ละทางจะได้โทนต่างกัน (สดใส · ขมหวาน · มืด) ตามความเข้มนี้ กันโมเดลที่ชอบทำให้ทุกทางนุ่มเหมือนกัน</p>
 </section>
 <section class="ouro-card">
   <h4>อารมณ์ที่อยากได้ <small>ไม่บังคับ</small></h4>
@@ -284,6 +289,7 @@ ${statusLine()}
     ${finaleBtn}
   </div>
   <p class="ouro-hint">ตัดด้าย = ทิ้งชะตาที่ยังไม่ล็อกแล้วเขียนใหม่ ใช้เมื่อรู้สึกว่าเรื่องกำลังไปทางที่ไม่ชอบ ไม่ต้องรู้ว่าทางนั้นคืออะไร</p>
+  <div class="ouro-row ouro-size-row"><span>ความเข้ม</span><select class="ouro-input" data-field="intensity">${INTENSITY_IDS.map(id => `<option value="${id}" ${(st.intensity ?? 'real') === id ? 'selected' : ''}>${INTENSITY[id].label}</option>`).join('')}</select></div>
   <div class="ouro-row ouro-size-row"><span>ขนาดแผน</span><select class="ouro-input" data-field="size">${SIZE_IDS.map(id => `<option value="${id}" ${st.size === id ? 'selected' : ''}>${SIZES[id].label}</option>`).join('')}</select></div>
 </section>
 <section class="ouro-card ouro-danger-zone">
@@ -370,7 +376,7 @@ function fateCard(f) {
 }
 
 function fullFate(f) {
-    return `<dl class="ouro-full"><dt>ความจริง</dt><dd>${esc(f.truth)}</dd>${f.twists?.length ? `<dt>หักมุม</dt><dd><ul>${f.twists.map(t => `<li>${esc(t)}</li>`).join('')}</ul></dd>` : ''}${f.ending ? `<dt>ตอนจบ</dt><dd>${esc(f.ending)}</dd>` : ''}</dl>`;
+    return `<dl class="ouro-full">${f.tone ? `<dt>โทน</dt><dd>${esc(TONES[f.tone] ?? f.tone)}</dd>` : ''}<dt>ความจริง</dt><dd>${esc(f.truth)}</dd>${f.twists?.length ? `<dt>หักมุม</dt><dd><ul>${f.twists.map(t => `<li>${esc(t)}</li>`).join('')}</ul></dd>` : ''}${f.ending ? `<dt>ตอนจบ</dt><dd>${esc(f.ending)}</dd>` : ''}</dl>`;
 }
 
 function renderFates(st) {
@@ -446,6 +452,10 @@ function onChange(e) {
     if (!f) return;
     if (f === 'includeExisting' && ui.draft) ui.draft.includeExisting = e.target.checked;
     if (f === 'backfill' && ui.draft) ui.draft.backfill = e.target.checked;
+    if (f === 'intensity') {
+        const st = host.state(false);
+        if (st && INTENSITY[e.target.value]) { st.intensity = e.target.value; done(); }
+    }
     if (f === 'size') {
         const st = host.state(false);
         if (st && SIZES[e.target.value]) { st.size = e.target.value; done(); }
@@ -479,6 +489,7 @@ function handle(act, btn) {
         case 'tab': ui.tab = btn.dataset.tab; ui.editing = null; return render();
         // setup
         case 'd-size': saveDraftFields(); ui.draft.size = val; return render();
+        case 'd-intensity': saveDraftFields(); ui.draft.intensity = val; return render();
         case 'd-mood': saveDraftFields(); toggle(ui.draft.moods, val); return render();
         case 'd-trope': saveDraftFields(); toggle(ui.draft.tropes, val); return render();
         case 'd-secret': saveDraftFields(); toggle(ui.draft.secretCats, val); return render();
@@ -493,7 +504,7 @@ function handle(act, btn) {
             saveDraftFields();
             const d = ui.draft;
             const fresh = newState({
-                size: d.size, premise: d.showPremise ? d.premise : '', tropes: d.showPremise ? d.tropes : [],
+                size: d.size, intensity: d.intensity, premise: d.showPremise ? d.premise : '', tropes: d.showPremise ? d.tropes : [],
                 secretCats: d.showSecret ? d.secretCats : [], moods: d.moods,
                 startedAt: d.includeExisting ? 0 : Math.max(0, c.length - 1),
                 owner: { chatId: host.chatId(), groupId: ctx().groupId ?? null },

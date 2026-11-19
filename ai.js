@@ -4,6 +4,8 @@
  * profile id. If the profile is gone, it falls back to 'main'.
  */
 
+import { looksLikeRefusal } from './lib.js';
+
 const ctx = () => SillyTavern.getContext();
 const LOG = '[Ouroboros]';
 
@@ -69,33 +71,42 @@ async function callOne(src, messages, maxTokens, timeoutMs, signal) {
 }
 
 /**
- * Ask the model. `accept(out)` returns the parsed value or throws when the answer is unusable;
- * one retry on the same API, then the error goes up.
+ * Ask the model. `accept(out)` returns the parsed value or throws when the answer is unusable.
+ * The main API gets two tries; a refusal or an empty answer skips straight to the backup (if one is set),
+ * which gets two tries of its own.
  * @template T
- * @param {{source:string, system:string, user:string, maxTokens:number, timeoutSec:number, accept:(out:string)=>T, signal?:AbortSignal}} o
- * @returns {Promise<{value:T, label:string, ms:number}>}
+ * @param {{role?:string, source:string, backup?:string, system:string, user:string, maxTokens:number, timeoutSec:number, accept:(out:string)=>T, signal?:AbortSignal}} o
+ * @returns {Promise<{value:T, label:string, ms:number, usedBackup:boolean}>}
  */
-export async function ask({ role = 'other', source, system, user, maxTokens, timeoutSec, accept, signal }) {
-    const src = resolve(source);
-    const label = sourceLabel(src);
+export async function ask({ role = 'other', source, backup = '', system, user, maxTokens, timeoutSec, accept, signal }) {
+    const main = resolve(source);
+    const chain = [main];
+    if (backup && backup !== 'none') {
+        const b = resolve(backup);
+        if (b !== main) chain.push(b);
+    }
     const messages = [{ role: 'system', content: system }, { role: 'user', content: user }];
-    let lastErr;
-    for (let attempt = 0; attempt < 2; attempt++) {
-        const t0 = Date.now();
-        const inChars = system.length + user.length;
-        let out = '';
-        try {
-            out = String(await callOne(src, messages, maxTokens, timeoutSec * 1000, signal) ?? '');
-            if (!out.trim()) throw new Error('ได้คำตอบว่าง (อาจโดน safety filter, โควต้าหมด หรือโมเดลคิดจนหมดโควต้าคำตอบ)');
-            const value = accept(out);
-            countUsage(role, inChars, out.length, false);
-            return { value, label, ms: Date.now() - t0 };
-        } catch (e) {
-            countUsage(role, inChars, out.length, true);
-            if (signal?.aborted) throw new Error('หยุดแล้ว');
-            console.warn(LOG, `${label} attempt ${attempt + 1} failed`, e);
-            lastErr = e;
+    const inChars = system.length + user.length;
+    const errors = [];
+    for (const [i, src] of chain.entries()) {
+        const label = sourceLabel(src);
+        for (let attempt = 0; attempt < 2; attempt++) {
+            const t0 = Date.now();
+            let out = '';
+            try {
+                out = String(await callOne(src, messages, maxTokens, timeoutSec * 1000, signal) ?? '');
+                if (!out.trim()) throw Object.assign(new Error('ได้คำตอบว่าง (อาจโดน safety filter, โควต้าหมด หรือโมเดลคิดจนหมดโควต้าคำตอบ)'), { skip: true });
+                if (looksLikeRefusal(out)) throw Object.assign(new Error('โมเดลปฏิเสธ (กำแพงศีลธรรมของโมเดล)'), { skip: true });
+                const value = accept(out);
+                countUsage(role, inChars, out.length, false);
+                return { value, label, ms: Date.now() - t0, usedBackup: i > 0 };
+            } catch (e) {
+                countUsage(role, inChars, out.length, true);
+                if (signal?.aborted) throw new Error('หยุดแล้ว');
+                console.warn(LOG, `${label} attempt ${attempt + 1} failed`, e);
+                if (attempt === 1 || (e.skip && chain.length > i + 1)) { errors.push(`${label}: ${e?.message ?? e}`); break; }
+            }
         }
     }
-    throw new Error(`${label}: ${lastErr?.message ?? lastErr}`);
+    throw new Error(errors.join(' · '));
 }

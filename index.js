@@ -13,7 +13,7 @@ import { normalizeState, buildInjection, trimToChat, DEFAULT_TEMPLATE, progressO
 
 const MODULE = 'ouroboros';
 const LOG = '[Ouroboros]';
-const VERSION = '0.4.1'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.5.0'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'lib.js', 'engine.js', 'panel.js', 'ai.js', 'diag.js', 'launcher.js', 'theme-palette.js', 'style.css', 'manifest.json'];
 
@@ -33,6 +33,9 @@ const DEFAULTS = {
     scoutMaxTokens: 600,
     timeoutSec: 120,
     leakAction: 'warn',     // warn | swipe | off
+    scoutBackup: '',        // '' = none; used when the main API refuses or fails
+    architectBackup: '',
+    noRush: false,          // ignore the Architect's "faster" (for models that rush to wrap up)
     launcher: true,
     launcherPos: LAUNCH_POS_DEFAULT,
 };
@@ -213,8 +216,8 @@ function onMessageReceived(mesId) {
 
 // ───────────────────────── settings drawer ─────────────────────────
 
-function sourceOptions(cur) {
-    const list = [{ id: 'main', name: 'API หลักของ ST' }, ...profiles()];
+function sourceOptions(cur, withNone = false) {
+    const list = [...(withNone ? [{ id: '', name: 'ไม่มี' }] : []), { id: 'main', name: 'API หลักของ ST' }, ...profiles()];
     if (cur && !list.some(p => p.id === cur)) list.push({ id: cur, name: sourceLabel(cur) });
     return list.map(p => `<option value="${esc(p.id)}" ${p.id === cur ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
 }
@@ -238,6 +241,11 @@ function mountSettings() {
       <small class="ouro-set-hint">อ่านข้อความล่าสุดแล้วดึงปม ทำทุกครั้งที่บอทตอบ ใช้โมเดลถูกและเร็วได้</small>
       <div class="ouro-set-row"><span>ผู้ทอชะตา</span><select id="ouro_arch_src" class="text_pole"></select></div>
       <small class="ouro-set-hint">เขียน ให้คะแนน ตัด และล็อกชะตา ทำห่าง ๆ ควรใช้โมเดลเก่งที่สุดที่มี · เลือกได้จาก Connection Profile ของ ST</small>
+      <div class="ouro-set-row"><span>ผู้เก็บปม สำรอง</span><select id="ouro_scout_bak" class="text_pole"></select></div>
+      <div class="ouro-set-row"><span>ผู้ทอชะตา สำรอง</span><select id="ouro_arch_bak" class="text_pole"></select></div>
+      <small class="ouro-set-hint">ใช้เมื่อโมเดลหลักปฏิเสธ (กำแพงศีลธรรม) ตอบว่าง หรือเรียกไม่สำเร็จ เช่น หลักเป็น GPT สำรองเป็น DeepSeek สำหรับฉากหนัก</small>
+      <label class="checkbox_label"><input type="checkbox" id="ouro_norush" ${s.noRush ? 'checked' : ''}><span>ห้ามเร่งเรื่อง</span></label>
+      <small class="ouro-set-hint">ผู้ทอชะตาชะลอจังหวะได้อย่างเดียว เร่งไม่ได้ เหมาะกับโมเดลที่ชอบรีบคลี่คลาย</small>
       <div class="ouro-set-row"><span>ทอชะตาทุก</span><input id="ouro_every" type="number" min="0" max="60" class="text_pole" value="${Number(s.every) || 0}"></div>
       <small class="ouro-set-hint">จำนวนข้อความของบอท · 0 = ตามขนาดแผน (สั้น 6 · กลาง 8 · ยาว 10 · มหากาพย์ 12)</small>
       <div class="ouro-set-row"><span>ความลับรั่ว</span><select id="ouro_leak" class="text_pole">
@@ -296,6 +304,9 @@ function mountSettings() {
     $('#ouro_open').on('click', () => openPanel());
     $('#ouro_scout_src').on('change', function () { settings().scoutSource = this.value; saveSettings(); });
     $('#ouro_arch_src').on('change', function () { settings().architectSource = this.value; saveSettings(); });
+    $('#ouro_scout_bak').on('change', function () { settings().scoutBackup = this.value; saveSettings(); });
+    $('#ouro_arch_bak').on('change', function () { settings().architectBackup = this.value; saveSettings(); });
+    $('#ouro_norush').on('change', function () { settings().noRush = this.checked; saveSettings(); });
     num('#ouro_every', 'every', 0, 60);
     num('#ouro_depth', 'depth', 0, 50);
     num('#ouro_budget', 'architectBudget', 1000, 60000);
@@ -318,6 +329,8 @@ function fillSources() {
     const s = settings();
     $('#ouro_scout_src').html(sourceOptions(s.scoutSource));
     $('#ouro_arch_src').html(sourceOptions(s.architectSource));
+    $('#ouro_scout_bak').html(sourceOptions(s.scoutBackup, true));
+    $('#ouro_arch_bak').html(sourceOptions(s.architectBackup, true));
 }
 
 function updateUsage() {
@@ -363,7 +376,7 @@ async function fetchRemoteVersion() {
 
 function settingsSummary() {
     const s = settings();
-    return JSON.stringify({ enabled: s.enabled, scout: sourceLabel(s.scoutSource), architect: sourceLabel(s.architectSource), every: s.every, depth: s.depth, role: s.role, budget: s.architectBudget, templateLen: String(s.template ?? '').length });
+    return JSON.stringify({ enabled: s.enabled, scout: sourceLabel(s.scoutSource), architect: sourceLabel(s.architectSource), backups: [s.scoutBackup ? sourceLabel(s.scoutBackup) : '-', s.architectBackup ? sourceLabel(s.architectBackup) : '-'], noRush: s.noRush, every: s.every, depth: s.depth, role: s.role, budget: s.architectBudget, templateLen: String(s.template ?? '').length });
 }
 function stateSummary() {
     const st = state();
