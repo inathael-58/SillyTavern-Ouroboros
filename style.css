@@ -316,7 +316,9 @@
 .ouro-set-row > select, .ouro-set-row > input { flex: 1.5 1 0; width: 0; min-width: 0; margin: 0; }
 .ouro-set-hint { display: block; opacity: 0.75; margin-bottom: 6px; line-height: 1.4; }
 .ouro-set-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
-.ouro-settings .menu_button { gap: 6px; }
+/* ST gives .menu_button width:min-content; with overflow-wrap:anywhere on the panel that is ONE letter wide,
+   so the label stacks vertically. Size buttons by their label and never break inside it. */
+.ouro-settings .menu_button { gap: 6px; width: max-content; max-width: 100%; white-space: nowrap; overflow-wrap: normal; }
 .ouro-set-status { margin: 8px 0 4px; overflow-wrap: anywhere; }
 .ouro-set-adv summary { cursor: pointer; margin: 6px 0; }
 .ouro-set-label { display: block; margin-top: 6px; }
