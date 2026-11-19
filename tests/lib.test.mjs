@@ -5,6 +5,7 @@ import {
     newState, normalizeState, progressOf, phaseAt, spawnRoom, applyArchitect, addSeeds, paySeeds, liveSeeds,
     trimToChat, cutThreads, lockedPastChat, unlockFate, advanceArc, newCycle, buildInjection, pickFocus,
     parseJsonLoose, cleanMessage, recentTranscript, pickSecretTropes, stats, nextFateId, lockIfDue,
+    carryState, secretsByTiming,
 } from '../lib.js';
 
 /** A chat of n visible messages, alternating user/bot, starting with a bot greeting. */
@@ -283,4 +284,32 @@ test('stats and normalizeState', () => {
     const s = stats(st, chatOf(3));
     assert.deepEqual(s.alive, { main: 0, arc: 0 });
     assert.equal(normalizeState(null), null);
+});
+
+// ---------------------------------------------------------------- v0.2
+
+test('a plan carried into a continued chat keeps progress, seeds and the lock', () => {
+    const st = newState({ size: 'short' });
+    const old = chatOf(40);
+    addSeeds(st, [{ text: 'ปมที่ค้างอยู่' }, { text: 'ปมที่เฉลยแล้ว' }], { msgId: 2 }, 'setup');
+    addSeeds(st, [{ text: 'ปมจาก swipe ที่ทิ้งไป' }], { msgId: 5, swipeId: 1 }, 'setup');
+    paySeeds(st, old, ['s2'], { msgId: 10, swipeId: 0 });
+    applyArchitect(st, { fates: [fate('a', { score: 90 }), fate('b')] }, { at: 4, prog: progressOf(st, chatOf(4)) });
+    lockIfDue(st, progressOf(st, old), 'main', 40);
+    const next = carryState(st, old, { chatId: 'chat2', from: 'chat1' });
+    assert.equal(next.owner.chatId, 'chat2');
+    assert.deepEqual(next.carriedFrom, ['chat1']);
+    const fresh = chatOf(2);
+    assert.equal(progressOf(next, fresh).main, 42 / 60, 'progress continues from the old chat');
+    assert.deepEqual(liveSeeds(next, fresh).map(x => [x.text, x.status]), [['ปมที่ค้างอยู่', 'open'], ['ปมที่เฉลยแล้ว', 'paid']]);
+    assert.equal(lockedPastChat(next, fresh).length, 0, 'old lock positions do not look like a rewind');
+    assert.equal(st.owner.chatId, undefined, 'the old state is not touched');
+});
+
+test('secretsByTiming holds secrets until their own layer reaches the climax', () => {
+    const st = newState({ size: 'long' });
+    st.fates.push({ id: 'A', layer: 'main', status: 'locked' }, { id: 'B', layer: 'arc', status: 'locked' });
+    st.secrets = [{ text: 'main truth', layer: 'main' }, { text: 'arc truth', layer: 'arc' }];
+    const r = secretsByTiming(st, { mainPhase: 'rising', arcPhase: 'climax' });
+    assert.deepEqual(r, { hold: ['main truth'], free: ['arc truth'] });
 });

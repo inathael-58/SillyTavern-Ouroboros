@@ -252,6 +252,8 @@ ${banners.join('')}
     <li>ปูไว้ <b>${k.planted}</b> ปม · เฉลยแล้ว <b>${k.paid}</b></li>
     ${fateLine}
     ${st.secretTropes ? `<li>มีโทรปลับ <b>${st.secretTropes.picked.length}</b> อัน</li>` : ''}
+    ${st.carriedFrom?.length ? `<li><small>${icon('fa-link')} ต่อเรื่องมาจาก ${st.carriedFrom.length} แชทก่อนหน้า</small></li>` : ''}
+    ${st.leaks?.length ? `<li><small>${icon('fa-shield-halved')} สงสัยความลับรั่ว ${st.leaks.length} ครั้ง</small></li>` : ''}
     ${k.peeked ? `<li class="ouro-peeked">${icon('fa-eye')} แอบดูแล้ว</li>` : ''}
   </ul>
 </section>
@@ -290,7 +292,7 @@ function renderSeeds(st) {
             return `<li class="ouro-seed is-editing"><textarea class="ouro-input" data-field="seed-text" rows="2">${esc(s.text)}</textarea>
 <div class="ouro-row"><select class="ouro-input" data-field="seed-kind">${kindOptions(s.kind)}</select><button class="ouro-btn ouro-primary" data-act="seed-save" data-id="${s.id}">บันทึก</button><button class="ouro-btn" data-act="seed-cancel">ยกเลิก</button></div></li>`;
         }
-        const where = Number.isInteger(s.msgId) ? `#${s.msgId}` : 'เพิ่มเอง';
+        const where = Number.isInteger(s.msgId) ? `#${s.msgId}` : s.carried ? 'ตอนก่อน' : 'เพิ่มเอง';
         return `<li class="ouro-seed ${s.status === 'paid' ? 'is-paid' : ''}">
 <span class="ouro-seed-ic" title="${esc(k.label)}">${icon(k.icon)}</span>
 <div class="ouro-seed-main"><span>${esc(s.text)}</span><small>${esc(k.label)} · ${where} · ${esc(phaseInfo(s.phase).label)}${s.user ? ' · ' + icon('fa-star') + ' เพิ่มเอง' : ''}</small></div>
@@ -369,10 +371,10 @@ function renderArchive(st) {
     const herrings = f => st.seeds.filter(s => s.herring && s.fates?.includes(f.id) && s.status !== 'dropped');
     const cards = [...show].reverse().map(f => `<article class="ouro-fate">
 <header><b>ชะตา ${esc(f.id)}</b>${f.layer === 'arc' ? `<span class="ouro-badge">องก์ ${esc(f.arc)}</span>` : ''}${f.cycle > 1 ? `<span class="ouro-badge">ภาค ${f.cycle}</span>` : ''}</header>
-<p class="ouro-meta">ถูกตัดที่ข้อความ #${esc(f.prunedAt)} · ${esc(f.pruneReason || '—')}</p>
+<p class="ouro-meta">ถูกตัดที่ข้อความ #${esc(f.prunedAt)}${f.prunedIn ? ' ของตอนก่อน' : ''} · ${esc(f.pruneReason || '—')}</p>
 ${fullFate(f)}
 ${herrings(f).length ? `<p class="ouro-meta">กลายเป็นปมหลอก: ${herrings(f).map(s => esc(s.text)).join(' · ')}</p>` : ''}
-${Number.isInteger(f.prunedAt) && f.prunedAt > 0 && f.prunedAt <= chat().length ? `<button class="ouro-btn ouro-small" data-act="jump" data-id="${Math.max(0, f.prunedAt - 1)}">${icon('fa-location-arrow')} ไปที่ข้อความที่แยกทาง</button>` : ''}
+${!f.prunedIn && Number.isInteger(f.prunedAt) && f.prunedAt > 0 && f.prunedAt <= chat().length ? `<button class="ouro-btn ouro-small" data-act="jump" data-id="${Math.max(0, f.prunedAt - 1)}">${icon('fa-location-arrow')} ไปที่ข้อความที่แยกทาง</button>` : ''}
 </article>`).join('');
     const more = gated.length && !ui.archiveOpen ? `<section class="ouro-card ouro-warn-card">${icon('fa-mask')} <span>อีก ${gated.length} ทางเป็นของเรื่องที่ยังไม่จบ</span>${confirmBtn('archive-open', 'ดูด้วย', 'ouro-small')}</section>` : '';
     return `<section class="ouro-card"><h4>ชะตาที่ไม่ได้เกิด</h4><p class="ouro-hint">ถ้าเรื่องไปอีกทาง จะเป็นแบบนี้</p></section>${cards}${more}`;

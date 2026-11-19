@@ -6,15 +6,16 @@
 import { installThemePalette } from './theme-palette.js';
 import { initEngine, scheduleScout, weaveNow, status } from './engine.js';
 import { initPanel, openPanel, closePanel, render as renderPanel, OVERLAY_ID } from './panel.js';
-import { profiles, sourceLabel } from './ai.js';
+import { profiles, sourceLabel, usageToday } from './ai.js';
+import { initLauncher, renderLauncher, updateLauncher, resetLauncherPos, LAUNCH_POS_DEFAULT } from './launcher.js';
 import { diag, runDiagnostics } from './diag.js';
-import { normalizeState, buildInjection, trimToChat, DEFAULT_TEMPLATE, progressOf, stats, sizeOf, phaseInfo } from './lib.js';
+import { normalizeState, buildInjection, trimToChat, DEFAULT_TEMPLATE, progressOf, stats, sizeOf, phaseInfo, carryState } from './lib.js';
 
 const MODULE = 'ouroboros';
 const LOG = '[Ouroboros]';
-const VERSION = '0.1.0'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.2.0'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
-const FILES = ['index.js', 'lib.js', 'engine.js', 'panel.js', 'ai.js', 'diag.js', 'theme-palette.js', 'style.css', 'manifest.json'];
+const FILES = ['index.js', 'lib.js', 'engine.js', 'panel.js', 'ai.js', 'diag.js', 'launcher.js', 'theme-palette.js', 'style.css', 'manifest.json'];
 
 const POS = { IN_CHAT: 1 };
 const ROLE = { SYSTEM: 0, USER: 1, ASSISTANT: 2 };
@@ -31,6 +32,9 @@ const DEFAULTS = {
     architectMaxTokens: 2500,
     scoutMaxTokens: 600,
     timeoutSec: 120,
+    leakAction: 'warn',     // warn | swipe | off
+    launcher: true,
+    launcherPos: LAUNCH_POS_DEFAULT,
 };
 
 const ctx = () => SillyTavern.getContext();
@@ -58,9 +62,10 @@ function state() {
 function setState(st) {
     const meta = ctx().chatMetadata;
     if (!meta) return;
-    if (st) meta[MODULE] = st;
-    else delete meta[MODULE];
+    if (st) { meta[MODULE] = st; delete meta[DECLINED]; }
+    else { delete meta[MODULE]; meta[DECLINED] = true; } // stopped on purpose: don't carry a plan in again
 }
+const DECLINED = MODULE + '_declined';
 const saveState = () => ctx().saveMetadataDebounced();
 
 /** Branches, checkpoints, renames: the plan follows the chat, minus seeds past its end. */
@@ -73,6 +78,78 @@ function adoptIfMoved() {
     st.owner = { ...(st.owner ?? {}), chatId: id, groupId: ctx().groupId ?? null };
     diag(`adopted plan from another chat (trimmed ${removed} seeds)`);
     saveState();
+}
+
+// ───────────────────────── continued chats (Memory Hub chain) ─────────────────────────
+
+/** The plan of the chat we were just in, kept so a continued chat can pick it up without a fetch. */
+let lastSeen = null;
+function rememberCurrent() {
+    const st = state();
+    if (!st) return;
+    lastSeen = { chatId: chatId(), state: structuredClone(st), chat: (ctx().chat ?? []).map(m => ({ is_system: !!m.is_system, is_user: !!m.is_user, swipe_id: m.swipe_id ?? 0 })) };
+}
+
+async function readChatPlan(id) {
+    const c = ctx();
+    let res;
+    if (c.groupId) {
+        res = await fetch('/api/chats/group/get', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify({ id }) });
+    } else {
+        const ch = c.characters?.[c.characterId];
+        if (!ch) return null;
+        res = await fetch('/api/chats/get', { method: 'POST', headers: c.getRequestHeaders(), body: JSON.stringify({ ch_name: ch.name, file_name: id, avatar_url: ch.avatar }) });
+    }
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data) || !data.length) return null;
+    return { chatId: id, state: data[0]?.chat_metadata?.[MODULE] ?? null, chat: data.slice(1) };
+}
+
+/** Memory Hub writes its chain a moment after the new chat opens, so look a few times. */
+async function tryCarry(prev, attempt = 0) {
+    const id = chatId();
+    if (!hasChat() || state() || ctx().chatMetadata?.[DECLINED]) return;
+    const chain = ctx().chatMetadata?.memory_hub?.chain;
+    const from = Array.isArray(chain) && chain.length ? String(chain[chain.length - 1]) : '';
+    if (!from) {
+        const wait = [1500, 3000, 5000][attempt];
+        if (wait) setTimeout(() => { if (chatId() === id) tryCarry(prev, attempt + 1); }, wait);
+        return;
+    }
+    let src = prev?.chatId === from ? prev : null;
+    if (!src) { try { src = await readChatPlan(from); } catch (e) { diag(`carry read failed: ${e?.message ?? e}`); } }
+    if (!src?.state || chatId() !== id || state()) return;
+    setState(carryState(normalizeState(src.state), src.chat, { chatId: id, groupId: ctx().groupId ?? null, from }));
+    saveState();
+    refresh();
+    diag(`carried plan from ${from}`);
+    toastr.info('แผนของตอนก่อนตามมาด้วยแล้ว', 'Ouroboros', { timeOut: 4000 });
+}
+
+// ───────────────────────── leak guard ─────────────────────────
+
+const autoSwiped = new Set();
+function swipeLast() {
+    const btn = document.querySelector('#chat .mes.last_mes .swipe_right');
+    if (!btn) return false;
+    btn.click();
+    return true;
+}
+/** The Scout thinks a reply gave a held secret away. Never shows what the secret is. */
+function onLeak({ msgId, chatId: cid }) {
+    const s = settings();
+    if (cid !== chatId() || s.leakAction === 'off') return;
+    const chat = ctx().chat ?? [];
+    const isLast = msgId === chat.length - 1;
+    const key = `${cid}:${msgId}`;
+    if (s.leakAction === 'swipe' && isLast && !autoSwiped.has(key) && !generating) {
+        autoSwiped.add(key);
+        if (swipeLast()) { toastr.info('ข้อความล่าสุดเผยความลับก่อนเวลา กำลัง swipe ใหม่ให้', 'Ouroboros', { timeOut: 4000 }); return; }
+    }
+    toastr.warning(isLast ? 'แตะที่นี่เพื่อ swipe ใหม่' : `ข้อความ #${msgId}`, 'Ouroboros: บอทอาจเผยความลับก่อนเวลา', {
+        timeOut: 10000, extendedTimeOut: 4000, closeButton: true, onclick: isLast ? () => swipeLast() : undefined,
+    });
 }
 
 // ───────────────────────── injection ─────────────────────────
@@ -90,6 +167,22 @@ function refresh() {
     applyInjection();
     renderPanel();
     updateSettingsStatus();
+    updateLauncher();
+    rememberCurrent();
+}
+
+function launcherState() {
+    if (status.busy) return 'busy';
+    if (status.lastError && (!status.lastOk || status.lastError.at > status.lastOk.at)) return 'attention';
+    return '';
+}
+function launcherTitle() {
+    const st = state();
+    if (!settings().enabled) return 'Ouroboros ปิดอยู่ · แตะเพื่อเปิดแผง';
+    if (!st) return 'Ouroboros · แชทนี้ยังไม่ได้วางชะตา · แตะเพื่อเริ่ม · ลากเพื่อย้าย';
+    if (status.busy) return status.busy === 'architect' ? 'Ouroboros · กำลังทอชะตา…' : 'Ouroboros · กำลังเก็บปม…';
+    const prog = progressOf(st, ctx().chat ?? []);
+    return `Ouroboros · ${phaseInfo(prog.phase).label} · แตะเพื่อเปิด · ลากเพื่อย้าย`;
 }
 
 // ───────────────────────── generation tracking ─────────────────────────
@@ -147,6 +240,17 @@ function mountSettings() {
       <small class="ouro-set-hint">เขียน ให้คะแนน ตัด และล็อกชะตา ทำห่าง ๆ ควรใช้โมเดลเก่งที่สุดที่มี · เลือกได้จาก Connection Profile ของ ST</small>
       <div class="ouro-set-row"><span>ทอชะตาทุก</span><input id="ouro_every" type="number" min="0" max="60" class="text_pole" value="${Number(s.every) || 0}"></div>
       <small class="ouro-set-hint">จำนวนข้อความของบอท · 0 = ตามขนาดแผน (สั้น 6 · กลาง 8 · ยาว 10 · มหากาพย์ 12)</small>
+      <div class="ouro-set-row"><span>ความลับรั่ว</span><select id="ouro_leak" class="text_pole">
+        <option value="warn" ${s.leakAction === 'warn' ? 'selected' : ''}>เตือน</option>
+        <option value="swipe" ${s.leakAction === 'swipe' ? 'selected' : ''}>swipe ใหม่เอง</option>
+        <option value="off" ${s.leakAction === 'off' ? 'selected' : ''}>ไม่ตรวจ</option></select></div>
+      <small class="ouro-set-hint">หลังล็อกชะตา ผู้เก็บปมตรวจด้วยว่าบอทเผยความลับก่อนเวลาไหม ทำในการเรียกเดียวกัน ไม่เสีย API เพิ่ม · swipe ใหม่เองทำครั้งเดียวต่อข้อความ · คำเตือนไม่บอกว่าความลับคืออะไร</small>
+      <p class="ouro-set-hint" id="ouro_usage"></p>
+
+      <h5>ปุ่มลอย</h5>
+      <label class="checkbox_label"><input type="checkbox" id="ouro_launcher_on" ${s.launcher ? 'checked' : ''}><span>แสดงปุ่มลอยบนจอ</span></label>
+      <small class="ouro-set-hint">แตะ = เปิดแผง · ลาก = ย้าย · เก็บเข้า Quick Dock ได้ (จุดบนปุ่มหลักของ dock บอกว่ากำลังทำงานหรือทำไม่สำเร็จ)</small>
+      <div class="ouro-set-actions"><button class="menu_button" id="ouro_launcher_reset">คืนตำแหน่งปุ่ม</button></div>
 
       <details class="ouro-set-adv">
         <summary>ขั้นสูง</summary>
@@ -197,6 +301,9 @@ function mountSettings() {
     num('#ouro_budget', 'architectBudget', 1000, 60000);
     num('#ouro_arch_max', 'architectMaxTokens', 500, 16000);
     num('#ouro_timeout', 'timeoutSec', 20, 600);
+    $('#ouro_leak').on('change', function () { settings().leakAction = this.value; saveSettings(); });
+    $('#ouro_launcher_on').on('change', function () { settings().launcher = this.checked; saveSettings(); renderLauncher(); });
+    $('#ouro_launcher_reset').on('click', () => { resetLauncherPos(); $('#ouro_launcher_on').prop('checked', true); });
     $('#ouro_role').on('change', function () { settings().role = Number(this.value); saveSettings(); applyInjection(); });
     $('#ouro_template').on('input', function () { settings().template = this.value; saveSettings(); applyInjection(); });
     $('#ouro_template_reset').on('click', () => { settings().template = DEFAULT_TEMPLATE; $('#ouro_template').val(DEFAULT_TEMPLATE); saveSettings(); applyInjection(); });
@@ -213,7 +320,17 @@ function fillSources() {
     $('#ouro_arch_src').html(sourceOptions(s.architectSource));
 }
 
+function updateUsage() {
+    const el = document.getElementById('ouro_usage');
+    if (!el) return;
+    const u = usageToday().roles;
+    const tok = r => Math.round(((r?.inChars ?? 0) + (r?.outChars ?? 0)) / 3 / 1000);
+    const part = (r, name) => `${name} ${r?.calls ?? 0} ครั้ง${r?.fails ? ` (ไม่สำเร็จ ${r.fails})` : ''}`;
+    el.textContent = `วันนี้ในเครื่องนี้: ${part(u.scout, 'เก็บปม')} · ${part(u.architect, 'ทอชะตา')} · ≈${tok(u.scout) + tok(u.architect)}k token`;
+}
+
 function updateSettingsStatus() {
+    updateUsage();
     const el = document.getElementById('ouro_status');
     if (!el) return;
     const st = state();
@@ -319,8 +436,8 @@ jQuery(async () => {
     try {
         settings();
         initEngine({
-            settings, state, save: () => { saveState(); refresh(); }, changed: () => { renderPanel(); updateSettingsStatus(); },
-            generating: () => generating, chatId, diag,
+            settings, state, save: () => { saveState(); refresh(); }, changed: () => { renderPanel(); updateSettingsStatus(); updateLauncher(); },
+            generating: () => generating, chatId, diag, onLeak,
         });
         initPanel({
             settings, state, setState, save: saveState, refresh, chatId, diag, status,
@@ -328,10 +445,12 @@ jQuery(async () => {
         });
         mountSettings();
         mountWand();
+        initLauncher({ settings, save: saveSettings, open: () => openPanel(), state: launcherState, title: launcherTitle });
+        renderLauncher();
         registerCommands();
 
         const { eventSource, eventTypes: E } = ctx();
-        eventSource.on(E.CHAT_CHANGED, () => { adoptIfMoved(); refresh(); });
+        eventSource.on(E.CHAT_CHANGED, () => { const prev = lastSeen; adoptIfMoved(); refresh(); tryCarry(prev); });
         eventSource.on(E.GENERATION_STARTED, onGenStarted);
         eventSource.on(E.GENERATION_AFTER_COMMANDS, onAfterCommands);
         eventSource.on(E.GENERATION_ENDED, onGenDone);
