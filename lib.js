@@ -252,6 +252,12 @@ export function trimToChat(st, chat) {
             s.paidBy = null;
         }
     }
+    const past = r => r && Number.isInteger(r.msgId) && r.msgId >= len;
+    for (const sec of st.secrets ?? []) {
+        if (Array.isArray(sec.clues)) sec.clues = sec.clues.filter(c => !past(c));
+        if (Array.isArray(sec.learned)) sec.learned = sec.learned.filter(l => !past(l));
+        if (past(sec.revealed)) sec.revealed = null;
+    }
     return before - st.seeds.length;
 }
 
@@ -414,7 +420,7 @@ export function applyArchitect(st, out, { at, prog }) {
 
     if (typeof out.beat === 'string') st.beat = str(out.beat, 400);
     if (Array.isArray(out.focus)) st.focus = strList(out.focus, 3).filter(id => st.seeds.some(s => s.id === id));
-    if (Array.isArray(out.secrets)) st.secrets = normSecrets(out.secrets, lays);
+    if (Array.isArray(out.secrets)) mergeSecrets(st, out.secrets);
     if (out.pace === 'slower') st.shift = clamp((st.shift || 0) + 0.05, -0.1, 0.1);
     else if (out.pace === 'faster') st.shift = clamp((st.shift || 0) - 0.05, -0.1, 0.1);
     if (typeof out.arcSummary === 'string' && out.arcSummary.trim()) st.arcSummaryDraft = str(out.arcSummary, 600);
@@ -422,13 +428,128 @@ export function applyArchitect(st, out, { at, prog }) {
     return res;
 }
 
-/** Secrets as [{text, layer}]; plain strings count as the main story's. */
-export function normSecrets(list, lays = ['main']) {
-    return (Array.isArray(list) ? list : [])
-        .map(x => (typeof x === 'string' ? { text: x, layer: 'main' } : { text: x?.text, layer: x?.layer }))
-        .map(x => ({ text: str(x.text, 300), layer: lays.includes(x.layer) ? x.layer : 'main' }))
-        .filter(x => x.text)
-        .slice(0, 6);
+// ---------------------------------------------------------------- secrets of locked fates
+
+/**
+ * A secret: { id, text, layer, arc, hiddenFrom[], when, changes, clueIdeas[],
+ *             clues: [{text, msgId, swipeId}], learned: [{who, msgId, swipeId}], revealed: {msgId, swipeId}|null }
+ * Clues, learned and revealed are tied to the reply that showed them, like seeds: swipe that reply
+ * away and they no longer count.
+ */
+export function normSecret(x, st) {
+    const lays = st ? layers(st) : ['main', 'arc'];
+    const layer = lays.includes(x?.layer) ? x.layer : 'main';
+    return {
+        id: String(x?.id ?? ''),
+        text: str(x?.text, 300),
+        layer,
+        arc: layer === 'arc' ? (Number.isInteger(x?.arc) ? x.arc : st?.arc?.index ?? 1) : null,
+        hiddenFrom: strList(x?.hiddenFrom, 8),
+        when: str(x?.when, 300),
+        changes: str(x?.changes, 300),
+        clueIdeas: strList(x?.clueIdeas, 4),
+        clues: Array.isArray(x?.clues) ? x.clues : [],
+        learned: Array.isArray(x?.learned) ? x.learned : [],
+        revealed: x?.revealed && typeof x.revealed === 'object' ? x.revealed : null,
+    };
+}
+
+function nextSecretId(list) {
+    const n = Math.max(0, ...list.map(s => Number(String(s.id).replace(/^K/, '')) || 0));
+    return 'K' + (n + 1);
+}
+
+/**
+ * Merge the Architect's secrets. Known ids are refined (hidden-from, timing, consequences, clue ideas);
+ * a secret's text never changes; new ones get the next id; nothing is dropped, revealed ones stay.
+ */
+export function mergeSecrets(st, list) {
+    const cur = (Array.isArray(st.secrets) ? st.secrets : []).map(x => normSecret(x, st));
+    for (const s of cur) if (!s.id) s.id = nextSecretId(cur);
+    for (const raw of Array.isArray(list) ? list : []) {
+        const x = typeof raw === 'string' ? { text: raw } : raw;
+        if (!x || typeof x !== 'object') continue;
+        const found = x.id && cur.find(s => s.id === String(x.id));
+        if (found) {
+            if (x.hiddenFrom) found.hiddenFrom = strList(x.hiddenFrom, 8);
+            if (x.when) found.when = str(x.when, 300);
+            if (x.changes) found.changes = str(x.changes, 300);
+            if (x.clueIdeas) found.clueIdeas = strList(x.clueIdeas, 4);
+            continue;
+        }
+        const text = str(x.text, 300);
+        if (!text || cur.some(s => normText(s.text) === normText(text))) continue;
+        if (cur.filter(s => !s.revealed).length >= 8) continue;
+        cur.push(normSecret({ ...x, id: nextSecretId(cur), text }, st));
+    }
+    st.secrets = cur;
+    return cur;
+}
+
+const sameName = (a, b) => {
+    const x = String(a ?? '').trim().toLowerCase();
+    const y = String(b ?? '').trim().toLowerCase();
+    return !!x && !!y && (x === y || x.includes(y) || y.includes(x));
+};
+
+const isReader = n => /\breader\b|ผู้อ่าน/i.test(String(n ?? ''));
+
+/** A secret as it stands on screen now. */
+export function secretView(chat, sec) {
+    const clues = (sec.clues ?? []).filter(c => onScreen(chat, c));
+    const learned = [...new Set((sec.learned ?? []).filter(l => onScreen(chat, l)).map(l => l.who))];
+    const revealed = sec.revealed && onScreen(chat, sec.revealed) ? sec.revealed : null;
+    // once it is out on the page, the reader knows it; characters still have to find out
+    const unknownTo = (sec.hiddenFrom ?? []).filter(n => !learned.some(w => sameName(w, n)) && !(revealed && isReader(n)));
+    return { ...sec, clues, learned, revealed, unknownTo };
+}
+
+/** Secrets that belong to what is locked right now (current act for act secrets). */
+export function activeSecrets(st, chat) {
+    return (st.secrets ?? [])
+        .filter(sec => lockedFate(st, sec.layer) && (sec.layer !== 'arc' || (sec.arc ?? st.arc.index) === st.arc.index))
+        .map(sec => secretView(chat, normSecret(sec, st)));
+}
+
+/**
+ * Apply what the Scout saw a reply do to the live secrets (numbered as it was shown them).
+ * @returns {{clues:number, learned:number, revealed:string[], leaked:string[]}} leaked = revealed while still held back
+ */
+export function applyScoutSecrets(st, chat, out, live, ref, heldIds = new Set()) {
+    const res = { clues: 0, learned: 0, revealed: [], leaked: [] };
+    if (!out || !live?.length || !ref || !Number.isInteger(ref.msgId)) return res;
+    const real = v => st.secrets.find(x => x.id === v?.id);
+    const pick = n => real(live[Number(n) - 1]);
+    const at = { msgId: ref.msgId, swipeId: ref.swipeId ?? 0 };
+    const sameRef = r => r && r.msgId === at.msgId && (r.swipeId ?? 0) === at.swipeId;
+    for (const c of Array.isArray(out.clues) ? out.clues : []) {
+        const sec = pick(c?.n ?? c?.secret);
+        const text = str(c?.text, 200);
+        if (!sec || !text) continue;
+        sec.clues = Array.isArray(sec.clues) ? sec.clues : [];
+        if (sec.clues.some(sameRef)) continue; // one clue per secret per reply
+        sec.clues.push({ text, ...at });
+        if (sec.clues.length > 12) sec.clues.shift();
+        res.clues++;
+    }
+    for (const l of Array.isArray(out.learned) ? out.learned : []) {
+        const sec = pick(l?.n ?? l?.secret);
+        const who = (sec?.hiddenFrom ?? []).find(n => sameName(n, l?.who));
+        if (!sec || !who) continue;
+        sec.learned = Array.isArray(sec.learned) ? sec.learned : [];
+        if (secretView(chat, sec).learned.some(w => sameName(w, who))) continue;
+        sec.learned.push({ who, ...at });
+        res.learned++;
+    }
+    const revealedNums = [...(Array.isArray(out.revealed) ? out.revealed : []), ...(Array.isArray(out.leaked) ? out.leaked : [])];
+    for (const n of new Set(revealedNums.map(Number))) {
+        const sec = pick(n);
+        if (!sec || secretView(chat, sec).revealed) continue;
+        sec.revealed = { ...at };
+        res.revealed.push(sec.id);
+        if (heldIds.has(sec.id)) res.leaked.push(sec.id);
+    }
+    return res;
 }
 
 function remapFateId(out, from, to) {
@@ -550,16 +671,30 @@ export function pickFocus(st, chat, prog, max = 3) {
     return out;
 }
 
-/** Locked truths split into those still held back and those the climax may release. */
-export function secretsByTiming(st, prog) {
+/** Locked truths: held back, free to come out (climax of their layer), or already out. */
+export function secretsByTiming(st, prog, chat = []) {
     const hold = [];
     const free = [];
-    for (const sec of st.secrets ?? []) {
-        if (!lockedFate(st, sec.layer)) continue; // nothing is true until its layer is locked
-        const ph = sec.layer === 'arc' ? prog.arcPhase : prog.mainPhase;
-        (phaseIndex(ph) >= phaseIndex('climax') ? free : hold).push(sec.text);
+    const revealed = [];
+    for (const v of activeSecrets(st, chat)) {
+        if (v.revealed) { revealed.push(v); continue; }
+        const ph = v.layer === 'arc' ? prog.arcPhase : prog.mainPhase;
+        (phaseIndex(ph) >= phaseIndex('climax') ? free : hold).push(v);
     }
-    return { hold, free };
+    return { hold, free, revealed };
+}
+
+/** How long after its reveal a truth keeps reminding the writer to play out what it changes. */
+export const AFTERMATH_MESSAGES = 40;
+
+function secretLines(v, { ideas = false, when = false } = {}) {
+    const lines = [`- ${v.text}`];
+    if (v.unknownTo.length) lines.push(`  Still unknown to: ${v.unknownTo.join(', ')}`);
+    if (v.learned.length) lines.push(`  Already knows: ${v.learned.join(', ')}`);
+    if (when && v.when) lines.push(`  Comes out when: ${v.when}`);
+    if (ideas && v.clueIdeas.length) lines.push(`  Clue ideas (small, could mean something else; most turns carry none): ${v.clueIdeas.slice(0, 2).join(' / ')}`);
+    if (v.clues.length) lines.push(`  Clues already planted: ${v.clues.slice(-2).map(c => c.text).join(' / ')}`);
+    return lines.join('\n');
 }
 
 /** The text injected into the chat for the story writer. Empty string = nothing to send. */
@@ -574,10 +709,13 @@ export function buildInjection(st, chat, template = DEFAULT_TEMPLATE) {
     const beat = st.beat ? `Next beat: ${st.beat}` : '';
     const focus = pickFocus(st, chat, prog);
     const seeds = focus.length ? `Threads worth picking up (weave them in subtly, no exposition):\n${focus.map(s => `- ${s.text}`).join('\n')}` : '';
-    const { hold, free } = secretsByTiming(st, prog);
+    const { hold, free, revealed } = secretsByTiming(st, prog, chat);
+    const recent = revealed.filter(v => !Number.isInteger(v.revealed.msgId) || (chat?.length ?? 0) - v.revealed.msgId <= AFTERMATH_MESSAGES);
     const secrets = [
-        hold.length ? `Do not reveal yet (hint at most):\n${hold.map(s => `- ${s}`).join('\n')}` : '',
-        free.length ? `Truths that may now come out, at the right dramatic moment:\n${free.map(s => `- ${s}`).join('\n')}` : '',
+        hold.length ? `Hidden truths. Do not reveal them yet; hint at most. Characters guard, avoid or pursue them:\n${hold.map(v => secretLines(v, { ideas: true })).join('\n')}` : '',
+        free.length ? `Truths that may now come out, at the right dramatic moment:\n${free.map(v => secretLines(v, { when: true })).join('\n')}` : '',
+        recent.length ? `Already revealed. Keep playing out what each one changes; a revealed truth is never dropped:\n${recent.map(v => `- ${v.text}${v.changes ? ` → ${v.changes}` : ''}${v.unknownTo.length ? ` (still unknown to: ${v.unknownTo.join(', ')})` : ''}`).join('\n')}` : '',
+        hold.length || free.length ? 'If the player\'s character reaches the place or person where a hidden truth is kept, they find it. Protect truths by making them hard or costly to reach, never by refusing an answer that is in front of them.' : '',
     ].filter(Boolean).join('\n');
     const fill = { phase, beat, seeds, secrets };
     const tpl = String(template || DEFAULT_TEMPLATE);
@@ -643,6 +781,8 @@ export function stats(st, chat) {
         locked: Object.fromEntries(lays.map(l => [l, !!lockedFate(st, l)])),
         unrealized: st.fates.filter(f => f.status === 'pruned').length,
         peeked: st.fates.some(f => f.peek > 0) || (st.secretTropes?.peek ?? 0) > 0,
+        secrets: activeSecrets(st, chat).length,
+        revealed: activeSecrets(st, chat).filter(v => v.revealed).length,
     };
 }
 
@@ -675,6 +815,13 @@ export function carryState(prev, prevChat, o) {
         if (Number.isInteger(f.lockedAt)) f.lockedAt = 0;
         if (Number.isInteger(f.prunedAt)) { f.prunedIn = o.from; }
     }
+    const carry = list => (Array.isArray(list) ? list : []).filter(r => onScreen(prevChat, r)).map(r => ({ ...r, msgId: null, swipeId: 0 }));
+    st.secrets = (st.secrets ?? []).map(sec => ({
+        ...sec,
+        clues: carry(sec.clues),
+        learned: carry(sec.learned),
+        revealed: sec.revealed && onScreen(prevChat, sec.revealed) ? { msgId: null, swipeId: 0 } : null,
+    }));
     st.scanned = [];
     st.lastArchitectAt = -1;
     st.lastScoutAt = -1;

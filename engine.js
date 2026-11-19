@@ -9,6 +9,7 @@ import {
     SIZES, sizeOf, PHASES, phaseInfo, progressOf, lockPoint, layerProgress, layers, alive, lockedFate, spawnRoom,
     liveSeeds, addSeeds, paySeeds, trimToChat, applyArchitect, advanceArc, countBotSince, recentTranscript,
     cleanMessage, parseJsonLoose, SEED_KINDS, secretsByTiming, backfillPlan, backfillUntil, backfillRef,
+    applyScoutSecrets, activeSecrets,
 } from './lib.js';
 
 const LOG = '[Ouroboros]';
@@ -144,19 +145,26 @@ async function runScout() {
     const transcript = recentTranscript(chat, 6000, targets[targets.length - 1] + 1).split('\n\n').filter(l => Number(l.match(/^#(\d+)/)?.[1]) >= from).join('\n\n');
     const kinds = Object.keys(SEED_KINDS).join('|');
     const last = targets[targets.length - 1];
-    // leak check rides along in the same call: no extra request
-    const held = s.leakAction !== 'off' ? secretsByTiming(st, prog).hold : [];
+    // the secret notebook rides along in the same call: clues, who found out, reveals (and leaks)
+    const timing = secretsByTiming(st, prog, chat);
+    const live = [...timing.hold, ...timing.free];
+    const heldIds = new Set(timing.hold.map(v => v.id));
+    const S = live.length;
     const user = [
         open.length ? `OPEN THREADS ALREADY NOTED (id: text):\n${open.map(x => `${x.id}: ${x.text}`).join('\n')}` : 'OPEN THREADS ALREADY NOTED: none',
-        held.length ? `HIDDEN TRUTHS THE STORY MUST NOT REVEAL YET (numbered):\n${held.map((t, i) => `${i + 1}. ${t}`).join('\n')}` : '',
+        S ? `HIDDEN TRUTHS OF THIS STORY (numbered; the reader must not learn them before their time):\n${live.map((v, i) => `${i + 1}. ${v.text}${v.unknownTo.length ? ` [hidden from: ${v.unknownTo.join(', ')}]` : ''}`).join('\n')}` : '',
         `LATEST STORY TEXT:\n${transcript}`,
         `TASK:
 1. List up to 3 NEW loose threads introduced in messages ${targets.map(i => '#' + i).join(', ')}. Skip atmosphere, trivia, and anything already noted above. Each "text" is one short concrete sentence (at most ~20 words), no interpretation. "msg" is the message number it appeared in.
 2. List the ids of noted threads that these messages clearly resolved or paid off.
-${held.length ? `3. "leaked": the numbers of hidden truths that message #${last} states outright or makes unmistakable (hints and foreshadowing are fine and do NOT count).\n` : ''}${storyLanguageHint()}
+${S ? `3. For message #${last} only, about the hidden truths:
+   "clues": a small detail it showed on the page that points at truth n and could also mean something else, as {"n":1,"text":"…"} (most replies carry none);
+   "learned": a character from truth n's hidden-from list who found it out in that message, as {"n":1,"who":"Name"};
+   "revealed": numbers of truths the message states outright or makes unmistakable to the reader. Hints and foreshadowing do NOT count.
+` : ''}${storyLanguageHint()}
 Answer with JSON only:
-{"new":[{"text":"…","kind":"${kinds}","msg":${last}}],"paid":["s1"]${held.length ? ',"leaked":[]' : ''}}
-If nothing qualifies: {"new":[],"paid":[]${held.length ? ',"leaked":[]' : ''}}`,
+{"new":[{"text":"…","kind":"${kinds}","msg":${last}}],"paid":["s1"]${S ? ',"clues":[],"learned":[],"revealed":[]' : ''}}
+If nothing qualifies: {"new":[],"paid":[]${S ? ',"clues":[],"learned":[],"revealed":[]' : ''}}`,
     ].filter(Boolean).join('\n\n');
 
     const { value } = await ask({
@@ -165,7 +173,7 @@ If nothing qualifies: {"new":[],"paid":[]${held.length ? ',"leaked":[]' : ''}}`,
         accept: out => {
             const j = parseJsonLoose(out);
             if (!j || typeof j !== 'object') throw new Error('ผู้เก็บปมตอบไม่เป็น JSON');
-            return { new: Array.isArray(j.new) ? j.new : [], paid: Array.isArray(j.paid) ? j.paid : [], leaked: Array.isArray(j.leaked) ? j.leaked : [] };
+            return { ...j, new: Array.isArray(j.new) ? j.new : [], paid: Array.isArray(j.paid) ? j.paid : [] };
         },
         role: 'scout',
     });
@@ -180,10 +188,11 @@ If nothing qualifies: {"new":[],"paid":[]${held.length ? ',"leaked":[]' : ''}}`,
     for (const i of targets) st.scanned.push(`${i}:${chat[i]?.swipe_id ?? 0}`);
     if (st.scanned.length > 300) st.scanned = st.scanned.slice(-300);
     st.lastScoutAt = last;
+    const sec = applyScoutSecrets(st, chat, value, live, { msgId: last, swipeId: chat[last]?.swipe_id ?? 0 }, heldIds);
+    if (sec.clues || sec.learned || sec.revealed.length) host.diag(`secrets: +${sec.clues} clues, +${sec.learned} learned, ${sec.revealed.length} revealed`);
     status.lastOk = { kind: 'scout', at: Date.now() };
     host.save();
-    const leaked = value.leaked.map(Number).filter(n => n >= 1 && n <= held.length);
-    if (leaked.length) {
+    if (sec.leaked.length && s.leakAction !== 'off') {
         st.leaks = [...(st.leaks ?? []), { msgId: last, swipeId: chat[last]?.swipe_id ?? 0, at: Date.now() }].slice(-20);
         host.diag(`leak suspected at #${last}`);
         host.onLeak({ msgId: last, swipeId: chat[last]?.swipe_id ?? 0, chatId });
@@ -273,6 +282,9 @@ export function architectDue(st, chat, s) {
         if (point != null && !lockedFate(st, l) && layerProgress(st, prog, l) >= point) return 'lock';
     }
     if (st.cutPending) return 'cut';
+    const act = activeSecrets(st, chat);
+    // a locked layer without its notebook (at most once per new bot reply, so a model that won't write it can't loop)
+    if (countBotSince(chat, st.lastArchitectAt) >= 1) for (const l of layers(st)) if (lockedFate(st, l) && !act.some(v => v.layer === l)) return 'secrets';
     if (size.arcs && prog.arc >= 1 && !(size.arcs !== Infinity && st.arc.index >= size.arcs) && !(size.arcs === Infinity && st.finale)) return 'arc';
     if (st.lastPhase && st.lastPhase !== `${prog.mainPhase}/${prog.phase}`) return 'phase';
     const every = Number(s.every) > 0 ? Number(s.every) : size.every;
@@ -321,6 +333,7 @@ async function runArchitect(reason) {
     const live = st.fates.filter(f => f.status === 'alive' || f.status === 'locked');
     const pruned = st.fates.filter(f => f.status === 'pruned' && f.cycle === st.cycle).slice(-8);
     const layerName = { main: 'main story', arc: `act ${st.arc.index}` };
+    const secretsNow = activeSecrets(st, chat);
 
     const plan = [
         `Plan size: ${size.label} (${SIZES[st.size] ? st.size : 'medium'}), about ${size.target} visible messages${size.arcs ? (size.arcs === Infinity ? ' per act, open-ended acts' : ` in ${size.arcs} acts`) : ''}.`,
@@ -359,7 +372,10 @@ async function runArchitect(reason) {
     tasks.push('"focus": up to 3 open seed ids the writer should touch soon. Near the climax include at least one seed from the setup phase, so the ending echoes the beginning.');
     tasks.push(`"beat": the next scene's direction for the ${prog.phase} phase, one sentence, no spoilers.`);
     tasks.push('"pace": "slower" if the story is not ready for its next phase yet, "faster" if it is ahead, else "keep".');
-    if (lays.some(l => lockedFate(st, l))) tasks.push('"secrets": the locked fates\' truths that are NOT yet revealed in the story, as [{"text","layer"}]. Drop ones the story already revealed.');
+    if (lays.some(l => lockedFate(st, l))) {
+        const missing = lays.filter(l => lockedFate(st, l) && !secretsNow.some(v => v.layer === l));
+        tasks.push(`"secrets": the hidden truths of the locked fate(s), as the author's notebook. ${missing.length ? `Write 1–3 for layer ${missing.map(l => `"${l}"`).join(' and ')} now, from the locked fate's truth and twists. ` : ''}Each: {"id" (keep the id of a secret listed above; omit for a new one),"layer","text" (what is actually true, a few plain sentences),"hiddenFrom" (names of the characters who don't know it, plus "the reader" if the story hasn't shown it),"when" (what has to happen for it to come out),"changes" (who acts differently once it is out, and how),"clueIdeas" (two or three small things the story could show that point at it and could also mean something else)}. A truth is about the world and the other characters, not the player's own past or motives. Return only new secrets and ones whose details you refine; never drop or rewrite a listed one.`);
+    }
     if (size.arcs && prog.arc >= 0.85) tasks.push('"arcSummary": two sentences on how this act resolved (or is resolving).');
 
     const user = [
@@ -369,6 +385,7 @@ async function runArchitect(reason) {
         past ? `PAST\n${past}` : '',
         mh ? `EARLIER IN THIS CHAT (summaries)\n${mh}` : '',
         `CURRENT FATES\n${live.length ? JSON.stringify(live.map(fateForPrompt)) : 'none yet'}`,
+        secretsNow.length ? `AUTHOR'S NOTEBOOK (secrets of the locked fates, as the story stands)\n${secretsNow.map(v => `${v.id} [${v.layer}${v.revealed ? ', REVEALED' : ''}] ${v.text} | hidden from: ${v.unknownTo.join(', ') || 'nobody now'}${v.learned.length ? ` | found out: ${v.learned.join(', ')}` : ''} | clues planted: ${v.clues.length}${v.clues.length ? ` (last: ${v.clues[v.clues.length - 1].text})` : ''}`).join('\n')}` : '',
         pruned.length ? `DISCARDED FATES (do not bring them back as they were)\n${pruned.map(f => `${f.id}: ${f.truth}`).join('\n')}` : '',
         `SEEDS (planted threads)\n${seeds.length ? seeds.map(x => `${x.id} [${x.kind}, planted in ${x.phase}, ${x.status}${x.user ? ', added by the player: weigh it more' : ''}${x.fates?.length ? `, fates ${x.fates.join('/')}` : ''}]: ${x.text}`).join('\n') : 'none yet'}`,
         `RECENT STORY\n${transcript}`,
@@ -383,6 +400,7 @@ async function runArchitect(reason) {
             if (!j || typeof j !== 'object') throw new Error('ผู้ทอชะตาตอบไม่เป็น JSON');
             const needBirth = lays.some(l => room[l] > 0 && alive(st, l).length === 0);
             if (needBirth && !(Array.isArray(j.fates) && j.fates.some(f => f?.truth))) throw new Error('ผู้ทอชะตาไม่ได้เขียนชะตา');
+            if (reason === 'secrets' && !(Array.isArray(j.secrets) && j.secrets.some(x => x?.text || typeof x === 'string'))) throw new Error('ผู้ทอชะตาไม่ได้เขียนความลับของชะตาที่ล็อก');
             return j;
         },
         role: 'architect',
@@ -395,6 +413,8 @@ async function runArchitect(reason) {
     status.lastOk = { kind: 'architect', at: Date.now() };
     host.save();
     host.diag(`architect ok (${reason}): +${res.added.length} -${res.pruned.length} lock ${res.locked.length}`);
+    // a fate just locked: write its notebook right away rather than at the next cadence
+    if (res.locked.length) weaveNow('secrets');
 }
 
 export const phaseLabel = id => phaseInfo(id).label;

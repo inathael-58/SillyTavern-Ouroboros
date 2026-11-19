@@ -375,3 +375,10 @@ body.reduced-motion #ouro_overlay *, body.reduced-motion #ouro_overlay { animati
 @keyframes ouro-spin { to { rotate: 360deg; } }
 body.reduced-motion #ouro_launcher i { animation: none !important; }
 @media (prefers-reduced-motion: reduce) { #ouro_launcher i { animation: none !important; } }
+
+/* the author's notebook inside a fully peeked, locked fate */
+.ouro-notebook { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid var(--ouro-line); }
+.ouro-secret { display: flex; flex-direction: column; gap: 2px; padding: 6px 8px; border-left: 3px solid var(--ouro-accent); background: var(--ouro-bg2); border-radius: var(--ouro-r-tag); }
+.ouro-secret p { margin: 0; }
+.ouro-secret small { color: var(--ouro-muted); font-size: 0.8em; }
+.ouro-secret.is-out { border-left-color: var(--ouro-line); }

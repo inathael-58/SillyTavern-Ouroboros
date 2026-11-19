@@ -7,7 +7,7 @@
 import {
     SIZES, SIZE_IDS, sizeOf, PHASES, phaseIndex, phaseInfo, progressOf, stats, liveSeeds, layers, alive, lockedFate,
     lockedPastChat, unlockFate, cutThreads, newCycle, addSeeds, SEED_KINDS, normKind, TROPES, TROPE_CATEGORIES, MOODS,
-    newState,
+    newState, activeSecrets,
 } from './lib.js';
 
 const ctx = () => SillyTavern.getContext();
@@ -264,6 +264,7 @@ ${banners.join('')}
     <li>ปูไว้ <b>${k.planted}</b> ปม · เฉลยแล้ว <b>${k.paid}</b></li>
     ${fateLine}
     ${st.secretTropes ? `<li>มีโทรปลับ <b>${st.secretTropes.picked.length}</b> อัน</li>` : ''}
+    ${k.secrets ? `<li>ความลับ <b>${k.secrets}</b> ข้อ · เผยแล้ว <b>${k.revealed}</b></li>` : ''}
     ${st.carriedFrom?.length ? `<li><small>${icon('fa-link')} ต่อเรื่องมาจาก ${st.carriedFrom.length} แชทก่อนหน้า</small></li>` : ''}
     ${st.leaks?.length ? `<li><small>${icon('fa-shield-halved')} สงสัยความลับรั่ว ${st.leaks.length} ครั้ง</small></li>` : ''}
     ${k.peeked ? `<li class="ouro-peeked">${icon('fa-eye')} แอบดูแล้ว</li>` : ''}
@@ -346,11 +347,24 @@ function peekButtons(level, act, id) {
         : n === level + 1 ? confirmBtn(act, `${icon('fa-eye')} ${PEEK[n][0]}`, 'ouro-small', `data-id="${esc(id)}" data-level="${n}" title="${PEEK[n][1]}"`) : '').join('')}</div>`;
 }
 
+function notebookHtml(f) {
+    const st = host.state(false);
+    if (!st || f.status !== 'locked') return '';
+    const list = activeSecrets(st, chat()).filter(v => v.layer === f.layer);
+    if (!list.length) return `<p class="ouro-meta">${icon('fa-book')} สมุดความลับยังไม่ได้เขียน (ผู้ทอชะตาจะเขียนในรอบถัดไป)</p>`;
+    return `<div class="ouro-notebook"><b>${icon('fa-book')} สมุดความลับ</b>${list.map(v => `<div class="ouro-secret ${v.revealed ? 'is-out' : ''}">
+<p>${esc(v.text)}</p>
+<small>${v.revealed ? `${icon('fa-lock-open')} เผยแล้ว${Number.isInteger(v.revealed.msgId) ? ` ที่ #${v.revealed.msgId}` : ''}` : `${icon('fa-lock')} ยังซ่อนอยู่`}${v.unknownTo.length ? ` · ยังไม่รู้: ${esc(v.unknownTo.join(', '))}` : ''}${v.learned.length ? ` · รู้แล้ว: ${esc(v.learned.join(', '))}` : ''} · เบาะแส ${v.clues.length} ครั้ง</small>
+${v.when ? `<small>จะเผยเมื่อ: ${esc(v.when)}</small>` : ''}${v.changes ? `<small>เผยแล้วจะเปลี่ยน: ${esc(v.changes)}</small>` : ''}
+${v.clues.length ? `<small>เบาะแสที่วางแล้ว: ${v.clues.map(c => esc(c.text)).join(' · ')}</small>` : ''}
+</div>`).join('')}</div>`;
+}
+
 function fateCard(f) {
     const parts = [];
     if (f.peek >= 1) parts.push(`<p class="ouro-scent">${esc(f.scent || '—')}</p>`);
     if (f.peek >= 2) parts.push(`<p class="ouro-shadow">${esc(f.shadow || '—')}</p>`);
-    if (f.peek >= 3) parts.push(fullFate(f));
+    if (f.peek >= 3) parts.push(fullFate(f), notebookHtml(f));
     const badge = f.status === 'locked' ? `<span class="ouro-badge is-lock">${icon('fa-lock')} ล็อกแล้ว</span>` : '';
     return `<article class="ouro-fate"><header><b>ชะตา ${esc(f.id)}</b>${badge}</header>${parts.join('')}${peekButtons(f.peek ?? 0, 'peek', f.id)}</article>`;
 }

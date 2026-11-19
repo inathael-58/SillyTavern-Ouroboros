@@ -6,6 +6,7 @@ import {
     trimToChat, cutThreads, lockedPastChat, unlockFate, advanceArc, newCycle, buildInjection, pickFocus,
     parseJsonLoose, cleanMessage, recentTranscript, pickSecretTropes, stats, nextFateId, lockIfDue,
     carryState, secretsByTiming, backfillPlan, backfillUntil, backfillRef,
+    mergeSecrets, applyScoutSecrets, activeSecrets, secretView,
 } from '../lib.js';
 
 /** A chat of n visible messages, alternating user/bot, starting with a bot greeting. */
@@ -232,7 +233,8 @@ test('after lock the secrets are held, then released at the climax', () => {
     applyArchitect(st, { fates: [fate('a', { score: 90 }), fate('b')] }, { at: 2, prog: progressOf(st, chatOf(2)) });
     let chat = chatOf(32);
     applyArchitect(st, { secrets: ['ยายคือคนร้าย'] }, { at: 32, prog: progressOf(st, chat) });
-    assert.match(buildInjection(st, chat), /Do not reveal yet[\s\S]*ยายคือคนร้าย/);
+    assert.match(buildInjection(st, chat), /Do not reveal them yet[\s\S]*ยายคือคนร้าย/);
+    assert.match(buildInjection(st, chat), /they find it/, 'the find-it rule rides along with hidden truths');
     chat = chatOf(50);
     assert.match(buildInjection(st, chat), /may now come out[\s\S]*ยายคือคนร้าย/);
     st.ended = true;
@@ -311,7 +313,9 @@ test('secretsByTiming holds secrets until their own layer reaches the climax', (
     st.fates.push({ id: 'A', layer: 'main', status: 'locked' }, { id: 'B', layer: 'arc', status: 'locked' });
     st.secrets = [{ text: 'main truth', layer: 'main' }, { text: 'arc truth', layer: 'arc' }];
     const r = secretsByTiming(st, { mainPhase: 'rising', arcPhase: 'climax' });
-    assert.deepEqual(r, { hold: ['main truth'], free: ['arc truth'] });
+    assert.deepEqual(r.hold.map(v => v.text), ['main truth']);
+    assert.deepEqual(r.free.map(v => v.text), ['arc truth']);
+    assert.deepEqual(r.revealed, []);
 });
 
 // ---------------------------------------------------------------- backfill
@@ -363,4 +367,83 @@ test('backfill range ends where the live Scout started, refs stay inside the par
     assert.equal(backfillRef({ kind: 'summary', ranges: [] }, null, chat), null);
     assert.equal(backfillRef({ kind: 'summary', ranges: [[0, 19]] }, null, chat), null, 'null is unknown, not message 0');
     assert.equal(backfillRef({ kind: 'chat', from: 0, to: 5 }, '', chat), null);
+});
+
+// ---------------------------------------------------------------- v0.4: who knows, clues, reveals
+
+function lockedShort() {
+    const st = newState({ size: 'short' });
+    applyArchitect(st, { fates: [fate('a', { score: 90 }), fate('b')] }, { at: 2, prog: progressOf(st, chatOf(2)) });
+    lockIfDue(st, progressOf(st, chatOf(32)), 'main', 32);
+    return st;
+}
+
+test('secrets keep their ids; a known id is refined, its text never changes, nothing is dropped', () => {
+    const st = lockedShort();
+    mergeSecrets(st, [{ text: 'ยายคือคนร้าย', hiddenFrom: ['Mira', 'the reader'], when: 'เมื่อเปิดจดหมาย', changes: 'Mira หนีออกจากบ้าน', clueIdeas: ['รอยหมึก', 'กลิ่นยา'] }]);
+    assert.equal(st.secrets[0].id, 'K1');
+    mergeSecrets(st, [{ id: 'K1', text: 'อย่างอื่น', hiddenFrom: ['Mira'] }, { text: 'พ่อบ้านรู้เห็น' }]);
+    assert.equal(st.secrets[0].text, 'ยายคือคนร้าย');
+    assert.deepEqual(st.secrets[0].hiddenFrom, ['Mira']);
+    assert.equal(st.secrets[1].id, 'K2');
+    mergeSecrets(st, []);
+    assert.equal(st.secrets.length, 2, 'an empty list drops nothing');
+});
+
+test('the Scout records clues, who learned, and reveals; swiping the reply away undoes them', () => {
+    const st = lockedShort();
+    mergeSecrets(st, [{ text: 'ยายคือคนร้าย', hiddenFrom: ['Mira', 'Kai'] }]);
+    const chat = chatOf(36);
+    let live = activeSecrets(st, chat);
+    const held = new Set(live.map(v => v.id));
+    let r = applyScoutSecrets(st, chat, { clues: [{ n: 1, text: 'หมึกที่นิ้วยาย' }, { n: 1, text: 'ซ้ำในข้อความเดียว' }], learned: [{ n: 1, who: 'kai' }, { n: 1, who: 'ไม่มีชื่อนี้' }] }, live, { msgId: 34, swipeId: 0 }, held);
+    assert.deepEqual([r.clues, r.learned], [1, 1]);
+    let v = secretView(chat, st.secrets[0]);
+    assert.deepEqual(v.learned, ['Kai']);
+    assert.deepEqual(v.unknownTo, ['Mira']);
+    assert.match(buildInjection(st, chat), /Still unknown to: Mira[\s\S]*Already knows: Kai[\s\S]*Clues already planted: หมึกที่นิ้วยาย/);
+
+    live = activeSecrets(st, chat);
+    r = applyScoutSecrets(st, chat, { revealed: [1] }, live, { msgId: 35, swipeId: 0 }, held);
+    assert.deepEqual(r.leaked, ['K1'], 'revealed while held = leak');
+    assert.deepEqual(secretView(chat, st.secrets[0]).unknownTo, ['Mira'], 'characters still have to find out');
+    mergeSecrets(st, [{ id: 'K1', hiddenFrom: ['Mira', 'the reader'] }]);
+    assert.deepEqual(secretView(chat, st.secrets[0]).unknownTo, ['Mira'], 'the reader knows once it is out');
+    assert.match(buildInjection(st, chat), /Already revealed/);
+    assert.doesNotMatch(buildInjection(st, chat), /Hidden truths/);
+
+    chat[35].swipe_id = 1; // the user swiped the leaky reply away
+    v = secretView(chat, st.secrets[0]);
+    assert.equal(v.revealed, null);
+    assert.match(buildInjection(st, chat), /Hidden truths/);
+    chat[34].swipe_id = 1;
+    assert.equal(secretView(chat, st.secrets[0]).clues.length, 0);
+});
+
+test('the aftermath reminder fades after a while; act secrets of a finished act stay out', () => {
+    const st = lockedShort();
+    mergeSecrets(st, [{ text: 'ความจริง', changes: 'ทุกคนหันหลังให้ยาย' }]);
+    st.secrets[0].revealed = { msgId: 34, swipeId: 0 };
+    assert.match(buildInjection(st, chatOf(50)), /→ ทุกคนหันหลังให้ยาย/);
+    assert.doesNotMatch(buildInjection(st, chatOf(80)), /Already revealed/);
+
+    const lg = newState({ size: 'long' });
+    lg.fates.push({ id: 'A', layer: 'arc', status: 'locked' });
+    mergeSecrets(lg, [{ text: 'ความลับองก์หนึ่ง', layer: 'arc' }]);
+    assert.equal(activeSecrets(lg, chatOf(10)).length, 1);
+    lg.arc.index = 2;
+    assert.equal(activeSecrets(lg, chatOf(10)).length, 0);
+});
+
+test('deleting messages and carrying to a new chat keep secret records consistent', () => {
+    const st = lockedShort();
+    mergeSecrets(st, [{ text: 'ความจริง', hiddenFrom: ['Mira'] }]);
+    const chat = chatOf(40);
+    const live = activeSecrets(st, chat);
+    applyScoutSecrets(st, chat, { clues: [{ n: 1, text: 'เบาะแส' }], learned: [{ n: 1, who: 'Mira' }] }, live, { msgId: 38, swipeId: 0 });
+    const next = carryState(st, chat, { chatId: 'c2', from: 'c1' });
+    assert.equal(secretView(chatOf(2), next.secrets[0]).learned[0], 'Mira', 'carried records stay valid in the new chat');
+    trimToChat(st, chatOf(30));
+    assert.equal(st.secrets[0].clues.length, 0);
+    assert.equal(st.secrets[0].learned.length, 0);
 });
