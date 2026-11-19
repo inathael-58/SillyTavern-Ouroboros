@@ -13,7 +13,7 @@ import {
 const ctx = () => SillyTavern.getContext();
 export const OVERLAY_ID = 'ouro_overlay';
 
-/** @type {{settings:()=>any, state:(create?:boolean)=>any, setState:(st:any)=>void, save:()=>void, refresh:()=>void, weave:(r:string)=>void, scout:()=>void, status:any, diag:(m:string)=>void, chatId:()=>string}} */
+/** @type {{settings:()=>any, state:(create?:boolean)=>any, setState:(st:any)=>void, save:()=>void, refresh:()=>void, weave:(r:string)=>void, scout:()=>void, backfill:()=>void, estimate:(st:any)=>any, status:any, diag:(m:string)=>void, chatId:()=>string}} */
 let host;
 const ui = { tab: 'home', open: false, openedAt: 0, archiveOpen: false, draft: null, editing: null };
 
@@ -132,7 +132,8 @@ const confirmBtn = (act, label, cls = '', extra = '') => `<button class="ouro-bt
 
 function renderSetup() {
     const len = chat().length;
-    const d = ui.draft ??= { size: 'medium', premise: '', tropes: [], custom: '', secretCats: [], moods: [], includeExisting: len <= 20, showPremise: false, showSecret: false };
+    const d = ui.draft ??= { size: 'medium', premise: '', tropes: [], custom: '', secretCats: [], moods: [], includeExisting: len <= 20, showPremise: false, showSecret: false, backfill: true };
+    const est = len > 4 ? host.estimate(null) : null;
     const sizes = SIZE_IDS.map(id => `<button class="ouro-seg ${d.size === id ? 'is-on' : ''}" data-act="d-size" data-val="${id}"><b>${SIZES[id].label}</b><small>${SIZES[id].range}</small></button>`).join('');
     const tropeCats = TROPE_CATEGORIES.map(c => `<div class="ouro-trope-cat"><small>${esc(c)}</small><div class="ouro-chips">${TROPES[c].map(t => chip(d.tropes.includes(t), 'd-trope', t, t)).join('')}</div></div>`).join('');
     const custom = d.tropes.filter(t => !Object.values(TROPES).flat().includes(t));
@@ -169,9 +170,18 @@ function renderSetup() {
 </section>
 <section class="ouro-card">
   ${len > 1 ? `<label class="ouro-check"><input type="checkbox" data-field="includeExisting" ${d.includeExisting ? 'checked' : ''}><span>นับรวมข้อความที่มีอยู่แล้ว (${len} ข้อความ)<small>ไม่ติ๊ก = เริ่มนับความยาวเรื่องจากตอนนี้</small></span></label>` : ''}
+  ${est ? `<label class="ouro-check"><input type="checkbox" data-field="backfill" ${d.backfill ? 'checked' : ''}><span>เก็บปมย้อนหลังจากข้อความที่มีอยู่แล้ว<small>${esc(estimateText(est))}</small></span></label>` : ''}
   <button class="ouro-btn ouro-primary ouro-wide" data-act="start">${icon('fa-play')} เริ่ม</button>
   ${aiHint()}
 </section>`;
+}
+
+function estimateText(est) {
+    const parts = [];
+    if (est.summaries) parts.push(`สรุปจาก Memory Hub ${est.summaries} ก้อน`);
+    const raw = est.parts.filter(p => p.kind === 'chat').length;
+    if (raw) parts.push(`อ่านข้อความ #${est.rawFrom}–#${est.rawTo} อีก ${raw} ช่วง`);
+    return `${parts.join(' + ')} · ใช้ผู้เก็บปม ≈${est.calls} ครั้ง${est.skipped ? ` · ข้อความเก่ากว่านั้นยาวเกิน อ่านเฉพาะช่วงหลัง` : ''}`;
 }
 
 function sizeHint(id) {
@@ -214,9 +224,11 @@ function statusLine() {
     const s = host.status;
     if (s.busy === 'architect') return `<p class="ouro-status is-busy">${icon('fa-spinner', 'fa-spin')} กำลังทอชะตา…</p>`;
     if (s.busy === 'scout') return `<p class="ouro-status is-busy">${icon('fa-spinner', 'fa-spin')} กำลังเก็บปม…</p>`;
+    if (s.busy === 'backfill') return `<p class="ouro-status is-busy">${icon('fa-spinner', 'fa-spin')} กำลังเก็บปมย้อนหลัง ${esc(s.progress)}…</p>`;
     if (s.lastError && (!s.lastOk || s.lastError.at > s.lastOk.at)) {
-        const who = s.lastError.kind === 'architect' ? 'ทอชะตา' : 'เก็บปม';
-        return `<div class="ouro-status is-error">${icon('fa-triangle-exclamation')} <span>${who}ไม่สำเร็จ: ${esc(s.lastError.msg)}</span><button class="ouro-btn ouro-small" data-act="${s.lastError.kind === 'architect' ? 'weave' : 'scout'}">ลองใหม่</button></div>`;
+        const who = { architect: 'ทอชะตา', backfill: 'เก็บปมย้อนหลัง' }[s.lastError.kind] ?? 'เก็บปม';
+        const act = { architect: 'weave', backfill: 'backfill' }[s.lastError.kind] ?? 'scout';
+        return `<div class="ouro-status is-error">${icon('fa-triangle-exclamation')} <span>${who}ไม่สำเร็จ: ${esc(s.lastError.msg)}</span><button class="ouro-btn ouro-small" data-act="${act}">ลองใหม่</button></div>`;
     }
     return '';
 }
@@ -292,7 +304,7 @@ function renderSeeds(st) {
             return `<li class="ouro-seed is-editing"><textarea class="ouro-input" data-field="seed-text" rows="2">${esc(s.text)}</textarea>
 <div class="ouro-row"><select class="ouro-input" data-field="seed-kind">${kindOptions(s.kind)}</select><button class="ouro-btn ouro-primary" data-act="seed-save" data-id="${s.id}">บันทึก</button><button class="ouro-btn" data-act="seed-cancel">ยกเลิก</button></div></li>`;
         }
-        const where = Number.isInteger(s.msgId) ? `#${s.msgId}` : s.carried ? 'ตอนก่อน' : 'เพิ่มเอง';
+        const where = Number.isInteger(s.msgId) ? `#${s.msgId}` : s.carried ? 'ตอนก่อน' : s.backfill ? 'จากสรุป' : 'เพิ่มเอง';
         return `<li class="ouro-seed ${s.status === 'paid' ? 'is-paid' : ''}">
 <span class="ouro-seed-ic" title="${esc(k.label)}">${icon(k.icon)}</span>
 <div class="ouro-seed-main"><span>${esc(s.text)}</span><small>${esc(k.label)} · ${where} · ${esc(phaseInfo(s.phase).label)}${s.user ? ' · ' + icon('fa-star') + ' เพิ่มเอง' : ''}</small></div>
@@ -300,7 +312,15 @@ function renderSeeds(st) {
 ${confirmBtn('seed-drop', icon('fa-trash'), 'ouro-icon-btn', `data-id="${s.id}" title="ลบ" aria-label="ลบ"`)}
 </li>`;
     };
+    const est = host.status.busy === 'backfill' ? null : host.estimate(st);
+    const back = host.status.busy === 'backfill'
+        ? `<section class="ouro-card">${statusLine()}</section>`
+        : est ? `<section class="ouro-card"><h4>${icon('fa-clock-rotate-left')} เก็บปมย้อนหลัง</h4>
+  <p class="ouro-hint">ข้อความ #${est.from}–#${est.until - 1} ยังไม่ได้เก็บปม · ${esc(estimateText(est))}</p>
+  ${confirmBtn('backfill', `${icon('fa-clock-rotate-left')} เก็บปมย้อนหลัง`)}</section>`
+        : st.lastBackfill ? `<p class="ouro-hint">${icon('fa-check')} เก็บย้อนหลังแล้ว ได้ ${st.lastBackfill.added} ปม</p>` : '';
     return `
+${back}
 <section class="ouro-card">
   <h4>เพิ่มปมเอง</h4>
   <textarea class="ouro-input" data-field="new-seed" rows="2" placeholder="เช่น แหวนที่ {{user}} เก็บได้ในป่า"></textarea>
@@ -411,6 +431,7 @@ function onChange(e) {
     const f = e.target?.dataset?.field;
     if (!f) return;
     if (f === 'includeExisting' && ui.draft) ui.draft.includeExisting = e.target.checked;
+    if (f === 'backfill' && ui.draft) ui.draft.backfill = e.target.checked;
     if (f === 'size') {
         const st = host.state(false);
         if (st && SIZES[e.target.value]) { st.size = e.target.value; done(); }
@@ -467,6 +488,7 @@ function handle(act, btn) {
             ui.draft = null;
             ui.tab = 'home';
             done();
+            if (d.backfill && c.length > 4) host.backfill(); // old seeds first, then the latest reply
             host.scout(); // the Architect follows once the first seeds are in
             return;
         }
@@ -474,6 +496,7 @@ function handle(act, btn) {
         case 'mood': toggle(st.moods, val); return done();
         case 'weave': host.weave('manual'); toastr.info('เริ่มทอชะตาแล้ว', 'Ouroboros', { timeOut: 2000 }); return render();
         case 'scout': host.scout(); return render();
+        case 'backfill': host.backfill(); return render();
         case 'cut': {
             const n = cutThreads(st, c.length);
             if (!n) { toastr.info('ไม่มีชะตาที่ยังไม่ล็อก'); return; }

@@ -8,7 +8,7 @@ import { ask } from './ai.js';
 import {
     SIZES, sizeOf, PHASES, phaseInfo, progressOf, lockPoint, layerProgress, layers, alive, lockedFate, spawnRoom,
     liveSeeds, addSeeds, paySeeds, trimToChat, applyArchitect, advanceArc, countBotSince, recentTranscript,
-    cleanMessage, parseJsonLoose, SEED_KINDS, secretsByTiming,
+    cleanMessage, parseJsonLoose, SEED_KINDS, secretsByTiming, backfillPlan, backfillUntil, backfillRef,
 } from './lib.js';
 
 const LOG = '[Ouroboros]';
@@ -16,7 +16,7 @@ const ctx = () => SillyTavern.getContext();
 
 /** @type {{settings:()=>any, state:()=>any, save:()=>void, changed:()=>void, generating:()=>boolean, chatId:()=>string, diag:(m:string)=>void, onLeak:(info:{msgId:number, swipeId:number, chatId:string})=>void}} */
 let host;
-export const status = { busy: null, lastOk: null, lastError: null, queued: [] };
+export const status = { busy: null, lastOk: null, lastError: null, queued: [], progress: '' };
 
 export function initEngine(h) { host = h; }
 
@@ -60,6 +60,21 @@ export function scheduleScout(delay = 2000) {
     scoutTimer = setTimeout(() => {
         enqueue('scout', runScout).then(() => maybeArchitect());
     }, delay);
+}
+
+/** Seeds from the part of the chat before Ouroboros started (Memory Hub summaries first). */
+export function backfillNow() {
+    return enqueue('backfill', runBackfill).then(() => maybeArchitect());
+}
+
+/** What a backfill of this chat would read, for the button's estimate. */
+export function backfillEstimate(st) {
+    const chat = ctx().chat ?? [];
+    const from = Number(st?.backfilledUntil) || 0;
+    const until = st ? backfillUntil(st, chat) : chat.length;
+    if (until - from < 3) return null;
+    const plan = backfillPlan(chat, ctx().chatMetadata?.memory_hub ?? null, { from, until, chatId: host.chatId() });
+    return plan.parts.length ? { ...plan, from, until, calls: plan.parts.length } : null;
 }
 
 export function weaveNow(reason = 'manual') {
@@ -172,6 +187,76 @@ If nothing qualifies: {"new":[],"paid":[]${held.length ? ',"leaked":[]' : ''}}`,
         st.leaks = [...(st.leaks ?? []), { msgId: last, swipeId: chat[last]?.swipe_id ?? 0, at: Date.now() }].slice(-20);
         host.diag(`leak suspected at #${last}`);
         host.onLeak({ msgId: last, swipeId: chat[last]?.swipe_id ?? 0, chatId });
+    }
+}
+
+// ---------------------------------------------------------------- backfill
+
+const BACKFILL_CAP = 15;
+
+async function runBackfill() {
+    const st = host.state();
+    const s = host.settings();
+    if (!st || !s.enabled) return;
+    const chatId = host.chatId();
+    const chat = ctx().chat ?? [];
+    const est = backfillEstimate(st);
+    if (!est) return;
+    const kinds = Object.keys(SEED_KINDS).join('|');
+    let added = 0;
+    try {
+        for (let i = 0; i < est.parts.length && added < BACKFILL_CAP; i++) {
+            const part = est.parts[i];
+            status.progress = `${i + 1}/${est.parts.length}`;
+            host.changed();
+            const open = liveSeeds(st, chat).filter(x => x.status === 'open');
+            const body = part.kind === 'summary'
+                ? `STORY SUMMARIES (from earlier in this chat; "#a–b" are message numbers):\n${part.text}`
+                : `STORY TEXT (messages #${part.from}–#${part.to}):\n${recentTranscript(chat, 1e9, part.to + 1).split('\n\n').filter(l => Number(l.match(/^#(\d+)/)?.[1]) >= part.from).join('\n\n')}`;
+            const user = [
+                open.length ? `OPEN THREADS ALREADY NOTED (id: text):\n${open.map(x => `${x.id}: ${x.text}`).join('\n')}` : 'OPEN THREADS ALREADY NOTED: none',
+                `PART ${i + 1} OF ${est.parts.length}, read in story order.\n${body}`,
+                `TASK:
+1. List up to 5 loose threads introduced in this part that are still unresolved by its end and could matter later (an unopened letter, an unexplained scar, a promise not yet kept, a stranger's name). Skip atmosphere, trivia, anything this part already resolves, and anything already noted above. Each "text" is one short concrete sentence (at most ~20 words). "msg" is the message number where it appears (for a summary, the last number of its range), or null if unknown.
+2. List the ids of noted threads that this part clearly resolves.
+${storyLanguageHint()}
+Answer with JSON only:
+{"new":[{"text":"…","kind":"${kinds}","msg":null}],"paid":[]}`,
+            ].join('\n\n');
+            const { value } = await ask({
+                role: 'scout', source: s.scoutSource, system: SCOUT_SYSTEM, user,
+                maxTokens: s.scoutMaxTokens, timeoutSec: s.timeoutSec,
+                accept: out => {
+                    const j = parseJsonLoose(out);
+                    if (!j || typeof j !== 'object') throw new Error('ผู้เก็บปมตอบไม่เป็น JSON');
+                    return { new: Array.isArray(j.new) ? j.new : [], paid: Array.isArray(j.paid) ? j.paid : [] };
+                },
+            });
+            if (host.chatId() !== chatId || host.state() !== st) return;
+            for (const it of value.new.slice(0, 5)) {
+                if (added >= BACKFILL_CAP) break;
+                const ref = backfillRef(part, it?.msg, chat) ?? { msgId: null, swipeId: 0 };
+                const got = addSeeds(st, [it], { ...ref, backfill: true }, 'setup');
+                for (const g of got) g.backfill = true;
+                added += got.length;
+            }
+            const endRef = part.kind === 'chat' ? { msgId: part.to, swipeId: chat[part.to]?.swipe_id ?? 0 } : null;
+            paySeeds(st, chat, value.paid, endRef);
+            st.backfilledUntil = part.kind === 'chat' ? part.to + 1 : Math.max(Number(st.backfilledUntil) || 0, ...part.ranges.map(r => r[1] + 1), est.from);
+            host.save();
+        }
+        st.backfilledUntil = est.until;
+        // the live Scout need not re-read what the backfill already covered
+        for (let i = est.until - 1; i >= est.from; i--) {
+            const m = chat[i];
+            if (m && !m.is_user && !m.is_system) { st.scanned = [...(st.scanned ?? []), `${i}:${m.swipe_id ?? 0}`].slice(-300); break; }
+        }
+        st.lastBackfill = { at: Date.now(), added, parts: est.parts.length };
+        status.lastOk = { kind: 'backfill', at: Date.now() };
+        host.save();
+        host.diag(`backfill ok: +${added} seeds from ${est.parts.length} parts`);
+    } finally {
+        status.progress = '';
     }
 }
 

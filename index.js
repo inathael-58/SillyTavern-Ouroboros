@@ -4,7 +4,7 @@
 // ดูรายละเอียดใน docs/SPEC.md
 
 import { installThemePalette } from './theme-palette.js';
-import { initEngine, scheduleScout, weaveNow, status } from './engine.js';
+import { initEngine, scheduleScout, weaveNow, backfillNow, backfillEstimate, status } from './engine.js';
 import { initPanel, openPanel, closePanel, render as renderPanel, OVERLAY_ID } from './panel.js';
 import { profiles, sourceLabel, usageToday } from './ai.js';
 import { initLauncher, renderLauncher, updateLauncher, resetLauncherPos, LAUNCH_POS_DEFAULT } from './launcher.js';
@@ -13,7 +13,7 @@ import { normalizeState, buildInjection, trimToChat, DEFAULT_TEMPLATE, progressO
 
 const MODULE = 'ouroboros';
 const LOG = '[Ouroboros]';
-const VERSION = '0.2.0'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.3.0'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'lib.js', 'engine.js', 'panel.js', 'ai.js', 'diag.js', 'launcher.js', 'theme-palette.js', 'style.css', 'manifest.json'];
 
@@ -180,7 +180,7 @@ function launcherTitle() {
     const st = state();
     if (!settings().enabled) return 'Ouroboros ปิดอยู่ · แตะเพื่อเปิดแผง';
     if (!st) return 'Ouroboros · แชทนี้ยังไม่ได้วางชะตา · แตะเพื่อเริ่ม · ลากเพื่อย้าย';
-    if (status.busy) return status.busy === 'architect' ? 'Ouroboros · กำลังทอชะตา…' : 'Ouroboros · กำลังเก็บปม…';
+    if (status.busy) return { architect: 'Ouroboros · กำลังทอชะตา…', backfill: 'Ouroboros · กำลังเก็บปมย้อนหลัง…' }[status.busy] ?? 'Ouroboros · กำลังเก็บปม…';
     const prog = progressOf(st, ctx().chat ?? []);
     return `Ouroboros · ${phaseInfo(prog.phase).label} · แตะเพื่อเปิด · ลากเพื่อย้าย`;
 }
@@ -339,7 +339,7 @@ function updateSettingsStatus() {
     const prog = progressOf(st, ctx().chat ?? []);
     const k = stats(st, ctx().chat ?? []);
     let line = `แชทนี้: ${sizeOf(st.size).label} · ${phaseInfo(prog.phase).label} · ปม ${k.planted} (เฉลย ${k.paid})`;
-    if (status.busy) line += status.busy === 'architect' ? ' · กำลังทอชะตา…' : ' · กำลังเก็บปม…';
+    if (status.busy) line += { architect: ' · กำลังทอชะตา…', backfill: ' · กำลังเก็บปมย้อนหลัง…' }[status.busy] ?? ' · กำลังเก็บปม…';
     else if (status.lastError && (!status.lastOk || status.lastError.at > status.lastOk.at)) line += ` · ไม่สำเร็จ: ${status.lastError.msg}`;
     el.textContent = line;
 }
@@ -441,7 +441,7 @@ jQuery(async () => {
         });
         initPanel({
             settings, state, setState, save: saveState, refresh, chatId, diag, status,
-            weave: reason => weaveNow(reason), scout: () => scheduleScout(0),
+            weave: reason => weaveNow(reason), scout: () => scheduleScout(0), backfill: () => backfillNow(), estimate: st => backfillEstimate(st),
         });
         mountSettings();
         mountWand();
