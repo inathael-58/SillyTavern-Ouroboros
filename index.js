@@ -13,7 +13,7 @@ import { normalizeState, buildInjection, trimToChat, DEFAULT_TEMPLATE, progressO
 
 const MODULE = 'ouroboros';
 const LOG = '[Ouroboros]';
-const VERSION = '0.5.0'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.6.0'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'lib.js', 'engine.js', 'panel.js', 'ai.js', 'diag.js', 'launcher.js', 'theme-palette.js', 'style.css', 'manifest.json'];
 
@@ -35,7 +35,8 @@ const DEFAULTS = {
     leakAction: 'warn',     // warn | swipe | off
     scoutBackup: '',        // '' = none; used when the main API refuses or fails
     architectBackup: '',
-    noRush: false,          // ignore the Architect's "faster" (for models that rush to wrap up)
+    noRush: false,
+    readLore: true,         // send the lorebook entries active in recent turns to the Architect          // ignore the Architect's "faster" (for models that rush to wrap up)
     launcher: true,
     launcherPos: LAUNCH_POS_DEFAULT,
 };
@@ -155,6 +156,28 @@ function onLeak({ msgId, chatId: cid }) {
     });
 }
 
+// ───────────────────────── lorebook entries in play ─────────────────────────
+
+/** Recent World Info activations (title + content), newest last, for the Architect. Kept in memory only. */
+const loreSeen = new Map();
+function onLoreActivated(entries) {
+    if (!Array.isArray(entries)) return;
+    for (const e of entries) {
+        const title = String(e?.comment || (Array.isArray(e?.key) ? e.key[0] : e?.key) || '').trim();
+        const content = String(e?.content ?? '').trim();
+        if (!title || !content) continue;
+        const id = `${e.world ?? ''}:${e.uid ?? title}`;
+        loreSeen.delete(id);
+        loreSeen.set(id, { title, content: content.slice(0, 500), chat: chatId(), at: Date.now() });
+    }
+    while (loreSeen.size > 60) loreSeen.delete(loreSeen.keys().next().value);
+}
+function loreForArchitect() {
+    if (!settings().readLore) return [];
+    const id = chatId();
+    return [...loreSeen.values()].filter(l => l.chat === id).slice(-40).reverse();
+}
+
 // ───────────────────────── injection ─────────────────────────
 
 function applyInjection(forceEmpty = false) {
@@ -246,6 +269,8 @@ function mountSettings() {
       <small class="ouro-set-hint">ใช้เมื่อโมเดลหลักปฏิเสธ (กำแพงศีลธรรม) ตอบว่าง หรือเรียกไม่สำเร็จ เช่น หลักเป็น GPT สำรองเป็น DeepSeek สำหรับฉากหนัก</small>
       <label class="checkbox_label"><input type="checkbox" id="ouro_norush" ${s.noRush ? 'checked' : ''}><span>ห้ามเร่งเรื่อง</span></label>
       <small class="ouro-set-hint">ผู้ทอชะตาชะลอจังหวะได้อย่างเดียว เร่งไม่ได้ เหมาะกับโมเดลที่ชอบรีบคลี่คลาย</small>
+      <label class="checkbox_label"><input type="checkbox" id="ouro_lore" ${s.readLore ? 'checked' : ''}><span>อ่าน lorebook ที่ทำงานอยู่</span></label>
+      <small class="ouro-set-hint">ส่งรายการ lorebook ที่ถูกดึงเข้าฉากล่าสุดให้ผู้ทอชะตาด้วย (ไม่เกินราว 1,300 token) ช่วยบอทตัวละครเยอะและแฟนด้อม</small>
       <div class="ouro-set-row"><span>ทอชะตาทุก</span><input id="ouro_every" type="number" min="0" max="60" class="text_pole" value="${Number(s.every) || 0}"></div>
       <small class="ouro-set-hint">จำนวนข้อความของบอท · 0 = ตามขนาดแผน (สั้น 6 · กลาง 8 · ยาว 10 · มหากาพย์ 12)</small>
       <div class="ouro-set-row"><span>ความลับรั่ว</span><select id="ouro_leak" class="text_pole">
@@ -307,6 +332,7 @@ function mountSettings() {
     $('#ouro_scout_bak').on('change', function () { settings().scoutBackup = this.value; saveSettings(); });
     $('#ouro_arch_bak').on('change', function () { settings().architectBackup = this.value; saveSettings(); });
     $('#ouro_norush').on('change', function () { settings().noRush = this.checked; saveSettings(); });
+    $('#ouro_lore').on('change', function () { settings().readLore = this.checked; saveSettings(); });
     num('#ouro_every', 'every', 0, 60);
     num('#ouro_depth', 'depth', 0, 50);
     num('#ouro_budget', 'architectBudget', 1000, 60000);
@@ -450,7 +476,7 @@ jQuery(async () => {
         settings();
         initEngine({
             settings, state, save: () => { saveState(); refresh(); }, changed: () => { renderPanel(); updateSettingsStatus(); updateLauncher(); },
-            generating: () => generating, chatId, diag, onLeak,
+            generating: () => generating, chatId, diag, onLeak, lore: loreForArchitect,
         });
         initPanel({
             settings, state, setState, save: saveState, refresh, chatId, diag, status,
@@ -472,6 +498,7 @@ jQuery(async () => {
         eventSource.on(E.MESSAGE_SWIPED, () => refresh());
         eventSource.on(E.MESSAGE_DELETED, () => { const st = state(); if (st && trimToChat(st, ctx().chat ?? [])) saveState(); refresh(); });
         eventSource.on(E.MESSAGE_EDITED, () => refresh());
+        if (E.WORLD_INFO_ACTIVATED) eventSource.on(E.WORLD_INFO_ACTIVATED, onLoreActivated);
 
         applyInjection();
         setTimeout(() => { fillSources(); checkVersion(); }, 3000);

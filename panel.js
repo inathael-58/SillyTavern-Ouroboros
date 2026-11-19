@@ -8,6 +8,7 @@ import {
     SIZES, SIZE_IDS, sizeOf, PHASES, phaseIndex, phaseInfo, progressOf, stats, liveSeeds, layers, alive, lockedFate,
     lockedPastChat, unlockFate, cutThreads, newCycle, addSeeds, SEED_KINDS, normKind, TROPES, TROPE_CATEGORIES, MOODS,
     newState, activeSecrets, INTENSITY, INTENSITY_IDS, TONES,
+    SHAPES, SHAPE_IDS, CANON, PROTECT_RULES, normProtected,
 } from './lib.js';
 
 const ctx = () => SillyTavern.getContext();
@@ -132,7 +133,7 @@ const confirmBtn = (act, label, cls = '', extra = '') => `<button class="ouro-bt
 
 function renderSetup() {
     const len = chat().length;
-    const d = ui.draft ??= { size: 'medium', intensity: 'real', premise: '', tropes: [], custom: '', secretCats: [], moods: [], includeExisting: len <= 20, showPremise: false, showSecret: false, backfill: true };
+    const d = ui.draft ??= { shape: 'story', canon: 'canon', protected: [], showProt: false, size: 'medium', intensity: 'real', premise: '', tropes: [], custom: '', secretCats: [], moods: [], includeExisting: len <= 20, showPremise: false, showSecret: false, backfill: true };
     const est = len > 4 ? host.estimate(null) : null;
     const sizes = SIZE_IDS.map(id => `<button class="ouro-seg ${d.size === id ? 'is-on' : ''}" data-act="d-size" data-val="${id}"><b>${SIZES[id].label}</b><small>${SIZES[id].range}</small></button>`).join('');
     const tropeCats = TROPE_CATEGORIES.map(c => `<div class="ouro-trope-cat"><small>${esc(c)}</small><div class="ouro-chips">${TROPES[c].map(t => chip(d.tropes.includes(t), 'd-trope', t, t)).join('')}</div></div>`).join('');
@@ -143,9 +144,19 @@ function renderSetup() {
   <p class="ouro-hint">ระบบจะเก็บปมที่เรื่องปูไว้ และวางชะตาลับหลายทางพร้อมกัน แล้วค่อยเลือกทางที่เข้ากับเรื่องจริงที่สุด คุณจะเห็นแค่ตัวเลข ไม่เห็นเนื้อหา เว้นแต่จะแอบดูเอง</p>
 </section>
 <section class="ouro-card">
+  <h4>แนวเรื่อง</h4>
+  <div class="ouro-segs ouro-segs-2">${SHAPE_IDS.map(id => `<button class="ouro-seg ${d.shape === id ? 'is-on' : ''}" data-act="d-shape" data-val="${id}"><b>${SHAPES[id].label}</b><small>${SHAPES[id].hint}</small></button>`).join('')}</div>
+  ${d.shape === 'cast' ? `<div class="ouro-segs ouro-segs-2">${Object.entries(CANON).map(([id, label]) => `<button class="ouro-seg ${d.canon === id ? 'is-on' : ''}" data-act="d-canon" data-val="${id}"><b>${label}</b><small>${id === 'canon' ? 'ความลับอยู่ในช่องว่างของแคนนอน' : 'บิดแคนนอนได้ เดายากขึ้น'}</small></button>`).join('')}</div>` : ''}
+  <p class="ouro-hint">${esc(shapeHint(d.shape))}</p>
+</section>
+${d.shape === 'sandbox' ? '' : `<section class="ouro-card">
   <h4>ขนาดแผน</h4>
   <div class="ouro-segs">${sizes}</div>
   <p class="ouro-hint">${esc(sizeHint(d.size))}</p>
+</section>`}
+<section class="ouro-card">
+  <button class="ouro-fold ${d.showProt || d.shape === 'harem' ? 'is-open' : ''}" data-act="d-fold" data-val="showProt">${icon('fa-chevron-right')} ตัวละครที่ห้ามแตะ <small>ไม่บังคับ</small></button>
+  ${d.showProt || d.shape === 'harem' ? protectedEditor(d.protected, 'd-') : ''}
 </section>
 <section class="ouro-card">
   <h4>ความเข้มของเรื่อง</h4>
@@ -187,6 +198,26 @@ function estimateText(est) {
     const raw = est.parts.filter(p => p.kind === 'chat').length;
     if (raw) parts.push(`อ่านข้อความ #${est.rawFrom}–#${est.rawTo} อีก ${raw} ช่วง`);
     return `${parts.join(' + ')} · ใช้ผู้เก็บปม ≈${est.calls} ครั้ง${est.skipped ? ` · ข้อความเก่ากว่านั้นยาวเกิน อ่านเฉพาะช่วงหลัง` : ''}`;
+}
+
+function shapeHint(id) {
+    return {
+        story: 'วางชะตาหลายทางรอบปมกลางเรื่องเดียว แล้วล็อกทางที่เข้ากับเรื่องจริงที่สุด',
+        sandbox: 'ไม่ยัดพล็อตใหญ่ตั้งแต่ต้น เรื่องย่อยเกิดตามที่ที่คุณไป (องก์ละ ~150 ข้อความ ต่อกันไปเรื่อย ๆ) เรื่องใหญ่โผล่เองเมื่อปมจากหลายองก์โยงหากัน และเสนอ "ตะขอ" ให้เลือกหยิบหรือเมินแทนการกำหนดทิศทาง',
+        cast: 'ชะตาวนรอบตัวละครที่ออกฉากจริง อ่าน lorebook ที่ทำงานอยู่ ตัวละครสำคัญแต่ละคนมีสายเรื่องของตัวเอง',
+        harem: 'ตัวละครสำคัญทุกคนมีความลับและสายเรื่องของตัวเอง ระบบไม่เลือกคู่แทนคุณ แนะนำให้ใส่ตัวละครที่ห้ามแตะด้วย',
+    }[id] ?? '';
+}
+
+/** Editor for protected characters; prefix 'd-' edits the setup draft, '' edits the chat's plan. */
+function protectedEditor(list, prefix) {
+    const rows = normProtected(list).map((p, i) => `<li class="ouro-prot">
+<b>${esc(p.name)}</b>
+<span class="ouro-chips">${Object.entries(PROTECT_RULES).map(([r, label]) => chip(p[r], `${prefix}prot-toggle`, `${i}:${r}`, label)).join('')}</span>
+<button class="ouro-icon-btn" data-act="${prefix}prot-del" data-val="${i}" title="ลบ" aria-label="ลบ">${icon('fa-xmark')}</button></li>`).join('');
+    return `<p class="ouro-hint">ตัวละครที่ชะตา หักมุม และความลับต้องไม่ทำให้เป็นคนร้าย ตาย หรือทรยศ (แตะชิปเพื่อปิดเฉพาะข้อ) ชะตาที่ละเมิดจะถูกทิ้ง</p>
+${rows ? `<ul class="ouro-prots">${rows}</ul>` : ''}
+<div class="ouro-row"><input class="ouro-input" data-field="${prefix}prot-name" placeholder="ชื่อตัวละคร (คั่นหลายชื่อด้วย ,)"><button class="ouro-btn" data-act="${prefix}prot-add">เพิ่ม</button></div>`;
 }
 
 function sizeHint(id) {
@@ -247,6 +278,7 @@ function renderHome(st) {
     const layerLabel = { main: size.arcs ? 'เรื่องหลัก' : '', arc: `องก์ ${st.arc.index}` };
     const fateLine = lays.map(l => {
         const pre = layerLabel[l] ? `<small>${layerLabel[l]}</small> ` : '';
+        if (l === 'main' && st.shape === 'sandbox' && !k.locked.main && !k.alive.main) return `<li>${pre}${icon('fa-cloud')} เรื่องใหญ่ยังไม่โผล่</li>`;
         return `<li>${pre}${k.locked[l] ? `${icon('fa-lock')} ชะตาถูกล็อกแล้ว` : `ชะตาที่ยังเป็นไปได้ <b>${k.alive[l]}</b>`}</li>`;
     }).join('');
     const banners = [];
@@ -265,6 +297,7 @@ ${banners.join('')}
 <section class="ouro-card ouro-hero">
   ${ring(st, prog)}
   <ul class="ouro-stats">
+    <li>แนวเรื่อง <b>${esc(SHAPES[st.shape ?? 'story'].label)}</b>${st.shape === 'cast' ? ` · ${esc(CANON[st.canon ?? 'canon'])}` : ''}</li>
     <li>ขนาดแผน <b>${esc(size.label)}</b>${size.arcs ? ` · องก์ที่ <b>${st.arc.index}</b>` : ''}${st.cycle > 1 ? ` · ภาค ${st.cycle}` : ''}</li>
     <li>ปูไว้ <b>${k.planted}</b> ปม · เฉลยแล้ว <b>${k.paid}</b></li>
     ${fateLine}
@@ -290,7 +323,11 @@ ${statusLine()}
   </div>
   <p class="ouro-hint">ตัดด้าย = ทิ้งชะตาที่ยังไม่ล็อกแล้วเขียนใหม่ ใช้เมื่อรู้สึกว่าเรื่องกำลังไปทางที่ไม่ชอบ ไม่ต้องรู้ว่าทางนั้นคืออะไร</p>
   <div class="ouro-row ouro-size-row"><span>ความเข้ม</span><select class="ouro-input" data-field="intensity">${INTENSITY_IDS.map(id => `<option value="${id}" ${(st.intensity ?? 'real') === id ? 'selected' : ''}>${INTENSITY[id].label}</option>`).join('')}</select></div>
-  <div class="ouro-row ouro-size-row"><span>ขนาดแผน</span><select class="ouro-input" data-field="size">${SIZE_IDS.map(id => `<option value="${id}" ${st.size === id ? 'selected' : ''}>${SIZES[id].label}</option>`).join('')}</select></div>
+  <div class="ouro-row ouro-size-row"><span>ขนาดแผน</span><select class="ouro-input" data-field="size" ${st.shape === 'sandbox' ? 'disabled title="โลกเปิดใช้องก์ต่อกันไปเรื่อย ๆ"' : ''}>${SIZE_IDS.map(id => `<option value="${id}" ${st.size === id ? 'selected' : ''}>${SIZES[id].label}</option>`).join('')}</select></div>
+</section>
+<section class="ouro-card">
+  <h4>ตัวละครที่ห้ามแตะ</h4>
+  ${protectedEditor(st.protected, '')}
 </section>
 <section class="ouro-card ouro-danger-zone">
   ${confirmBtn('stop', `${icon('fa-trash')} หยุดใช้ในแชทนี้`, 'ouro-danger')}
@@ -379,6 +416,16 @@ function fullFate(f) {
     return `<dl class="ouro-full">${f.tone ? `<dt>โทน</dt><dd>${esc(TONES[f.tone] ?? f.tone)}</dd>` : ''}<dt>ความจริง</dt><dd>${esc(f.truth)}</dd>${f.twists?.length ? `<dt>หักมุม</dt><dd><ul>${f.twists.map(t => `<li>${esc(t)}</li>`).join('')}</ul></dd>` : ''}${f.ending ? `<dt>ตอนจบ</dt><dd>${esc(f.ending)}</dd>` : ''}</dl>`;
 }
 
+function threadsHtml(st) {
+    if (!SHAPES[st.shape ?? 'story']?.threads) return '';
+    const list = st.threads ?? [];
+    const cards = list.map((t, i) => `<article class="ouro-fate"><header><b>${esc(t.name)}</b>${t.status === 'resolved' ? `<span class="ouro-badge">จบสายแล้ว</span>` : ''}</header>
+${t.peek >= 1 ? `<p class="ouro-shadow">อยากได้: ${esc(t.want || '—')}${t.next ? ` · ต่อไป: ${esc(t.next)}` : ''}</p>` : ''}
+${t.peek >= 2 ? `<p class="ouro-scent">ความลับ: ${esc(t.secret || '—')}</p>` : ''}
+<div class="ouro-peek-row">${[1, 2].map(n => n <= (t.peek ?? 0) ? `<span class="ouro-peek-done">${icon('fa-check')} ${n === 1 ? 'สิ่งที่อยากได้' : 'ความลับ'}</span>` : n === (t.peek ?? 0) + 1 ? confirmBtn('peek-thread', `${icon('fa-eye')} ${n === 1 ? 'สิ่งที่อยากได้' : 'ความลับ'}`, 'ouro-small', `data-id="${i}" data-level="${n}"`) : '').join('')}</div></article>`).join('');
+    return `<section class="ouro-card"><h4>สายตัวละคร <small>${list.length}</small></h4>${cards || empty('fa-users', 'ยังไม่มีสายตัวละคร', 'ผู้ทอชะตาจะเขียนให้ตัวละครสำคัญแต่ละคนในรอบถัดไป')}</section>`;
+}
+
 function renderFates(st) {
     const size = sizeOf(st.size);
     const lays = layers(st);
@@ -394,7 +441,7 @@ ${tr.peek >= 2 ? `<p class="ouro-shadow">${tr.picked.map(p => esc(p.trope)).join
 <div class="ouro-peek-row">${[1, 2].map(n => n <= tr.peek ? `<span class="ouro-peek-done">${icon('fa-check')} ${n === 1 ? 'หมวด' : 'โทรป'}</span>` : n === tr.peek + 1 ? confirmBtn('peek-trope', `${icon('fa-eye')} ${n === 1 ? 'หมวด' : 'โทรป'}`, 'ouro-small', `data-level="${n}"`) : '').join('')}</div></section>` : '';
     return `
 <section class="ouro-card ouro-warn-card">${icon('fa-mask')} <span>แอบดูทีละขั้น ต้องแตะสองครั้งทุกครั้ง ดูแล้วย้อนไม่ได้ และหน้าหลักจะขึ้นว่า "แอบดูแล้ว"</span></section>
-${blocks}${trope}`;
+${blocks}${threadsHtml(st)}${trope}`;
 }
 
 // ---------------------------------------------------------------- archive
@@ -490,6 +537,32 @@ function handle(act, btn) {
         // setup
         case 'd-size': saveDraftFields(); ui.draft.size = val; return render();
         case 'd-intensity': saveDraftFields(); ui.draft.intensity = val; return render();
+        case 'd-shape': saveDraftFields(); ui.draft.shape = val; return render();
+        case 'd-canon': saveDraftFields(); ui.draft.canon = val; return render();
+        case 'd-prot-add': case 'prot-add': {
+            if (act === 'd-prot-add') saveDraftFields();
+            const box = field(act === 'd-prot-add' ? 'd-prot-name' : 'prot-name');
+            const list = act === 'd-prot-add' ? ui.draft.protected : (st.protected ??= []);
+            for (const name of String(box?.value ?? '').split(',').map(x => x.trim()).filter(Boolean)) {
+                if (!list.some(p => p.name.toLowerCase() === name.toLowerCase())) list.push({ name, villain: true, death: true, betray: true });
+            }
+            return act === 'd-prot-add' ? render() : done();
+        }
+        case 'd-prot-toggle': case 'prot-toggle': {
+            if (act === 'd-prot-toggle') saveDraftFields();
+            const [i, rule] = String(val).split(':');
+            const list = act === 'd-prot-toggle' ? ui.draft.protected : st.protected;
+            const p = list?.[Number(i)];
+            if (p) p[rule] = p[rule] === false;
+            return act === 'd-prot-toggle' ? render() : done();
+        }
+        case 'd-prot-del': case 'prot-del': {
+            if (act === 'd-prot-del') saveDraftFields();
+            const list = act === 'd-prot-del' ? ui.draft.protected : st.protected;
+            list?.splice(Number(val), 1);
+            return act === 'd-prot-del' ? render() : done();
+        }
+        case 'peek-thread': { const t = st.threads?.[Number(id)]; if (t) t.peek = Math.max(t.peek ?? 0, Number(btn.dataset.level)); return done(); }
         case 'd-mood': saveDraftFields(); toggle(ui.draft.moods, val); return render();
         case 'd-trope': saveDraftFields(); toggle(ui.draft.tropes, val); return render();
         case 'd-secret': saveDraftFields(); toggle(ui.draft.secretCats, val); return render();
@@ -504,7 +577,7 @@ function handle(act, btn) {
             saveDraftFields();
             const d = ui.draft;
             const fresh = newState({
-                size: d.size, intensity: d.intensity, premise: d.showPremise ? d.premise : '', tropes: d.showPremise ? d.tropes : [],
+                shape: d.shape, canon: d.canon, protected: d.protected, size: d.size, intensity: d.intensity, premise: d.showPremise ? d.premise : '', tropes: d.showPremise ? d.tropes : [],
                 secretCats: d.showSecret ? d.secretCats : [], moods: d.moods,
                 startedAt: d.includeExisting ? 0 : Math.max(0, c.length - 1),
                 owner: { chatId: host.chatId(), groupId: ctx().groupId ?? null },
