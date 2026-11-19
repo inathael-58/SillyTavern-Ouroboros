@@ -5,7 +5,7 @@ import {
     newState, normalizeState, progressOf, phaseAt, spawnRoom, applyArchitect, addSeeds, paySeeds, liveSeeds,
     trimToChat, cutThreads, lockedPastChat, unlockFate, advanceArc, newCycle, buildInjection, pickFocus,
     parseJsonLoose, cleanMessage, recentTranscript, pickSecretTropes, stats, nextFateId, lockIfDue,
-    carryState, secretsByTiming,
+    carryState, secretsByTiming, backfillPlan, backfillUntil, backfillRef,
 } from '../lib.js';
 
 /** A chat of n visible messages, alternating user/bot, starting with a bot greeting. */
@@ -312,4 +312,55 @@ test('secretsByTiming holds secrets until their own layer reaches the climax', (
     st.secrets = [{ text: 'main truth', layer: 'main' }, { text: 'arc truth', layer: 'arc' }];
     const r = secretsByTiming(st, { mainPhase: 'rising', arcPhase: 'climax' });
     assert.deepEqual(r, { hold: ['main truth'], free: ['arc truth'] });
+});
+
+// ---------------------------------------------------------------- backfill
+
+test('backfill reads Memory Hub summaries first and raw messages only after them', () => {
+    const chat = chatOf(60);
+    const mh = {
+        overview: 'เรื่องย่อ',
+        lastEnd: 39,
+        memories: [
+            { start: 0, end: 19, title: 'ต้นเรื่อง', text: 'ยายให้จดหมาย' },
+            { start: 20, end: 39, title: 'กลางเรื่อง', text: 'คนสวนมีแผล' },
+            { start: 0, end: 30, title: 'จากตอนก่อน', text: 'ตอนก่อน', origin: { chat: 'old', start: 0, end: 30 } },
+        ],
+    };
+    const plan = backfillPlan(chat, mh, { until: 55, chatId: 'cur', chunkChars: 60 });
+    assert.equal(plan.summaries, 3);
+    assert.equal(plan.parts[0].kind, 'summary');
+    assert.match(plan.parts[0].text, /Overview: เรื่องย่อ/);
+    assert.match(plan.parts[0].text, /\(earlier chapter\)/);
+    assert.deepEqual(plan.parts[0].ranges, [[0, 19], [20, 39]]);
+    const raw = plan.parts.filter(p => p.kind === 'chat');
+    assert.equal(raw[0].from, 40, 'raw reading starts where the summaries stop');
+    assert.equal(raw[raw.length - 1].to, 54);
+    assert.ok(raw.length > 1);
+});
+
+test('without Memory Hub the whole range is read raw, capped to the newest parts', () => {
+    const chat = chatOf(200);
+    const plan = backfillPlan(chat, null, { until: 200, chunkChars: 30, maxChunkChars: 30, maxParts: 5 });
+    assert.equal(plan.parts.length, 5);
+    assert.equal(plan.parts[4].to, 199);
+    assert.ok(plan.skipped > 0);
+    const big = backfillPlan(chat, null, { until: 200, maxParts: 20 });
+    assert.ok(big.parts.length <= 20);
+    assert.equal(big.skipped, 0, 'chunks grow so a normal chat fits in 20 parts');
+});
+
+test('backfill range ends where the live Scout started, refs stay inside the part', () => {
+    const st = newState();
+    const chat = chatOf(30);
+    assert.equal(backfillUntil(st, chat), 30);
+    st.scanned = ['26:0', '28:1'];
+    assert.equal(backfillUntil(st, chat), 26);
+    chat[12].swipe_id = 2;
+    assert.deepEqual(backfillRef({ kind: 'chat', from: 10, to: 15 }, 12, chat), { msgId: 12, swipeId: 2 });
+    assert.equal(backfillRef({ kind: 'chat', from: 10, to: 15 }, 16, chat), null);
+    assert.deepEqual(backfillRef({ kind: 'summary', ranges: [[0, 19]] }, '19', chat), { msgId: 19, swipeId: 0 });
+    assert.equal(backfillRef({ kind: 'summary', ranges: [] }, null, chat), null);
+    assert.equal(backfillRef({ kind: 'summary', ranges: [[0, 19]] }, null, chat), null, 'null is unknown, not message 0');
+    assert.equal(backfillRef({ kind: 'chat', from: 0, to: 5 }, '', chat), null);
 });

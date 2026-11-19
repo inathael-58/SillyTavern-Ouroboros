@@ -681,3 +681,78 @@ export function carryState(prev, prevChat, o) {
     st.history.push({ at: 0, event: 'carried', from: o.from });
     return st;
 }
+
+// ---------------------------------------------------------------- backfill: seeds from the chat before Ouroboros started
+
+/**
+ * Where the backfill stops: the oldest message the live Scout has already read (or the end of the chat).
+ */
+export function backfillUntil(st, chat) {
+    const idx = (st.scanned ?? []).map(k => Number(String(k).split(':')[0])).filter(Number.isInteger);
+    return idx.length ? Math.min(...idx) : (chat?.length ?? 0);
+}
+
+/**
+ * How to read the old part of a chat: Memory Hub summaries where they exist (cheap), raw messages
+ * only for what no summary covers. At most `maxParts` raw parts; a very long uncovered stretch is read
+ * from its newest end.
+ * @param {any[]} chat
+ * @param {any} mh chat_metadata.memory_hub (or null)
+ * @param {{from?:number, until:number, chatId?:string, summaryChars?:number, chunkChars?:number, maxChunkChars?:number, maxParts?:number}} o
+ * @returns {{parts:Array<{kind:'summary', text:string, ranges:Array<[number,number]>}|{kind:'chat', from:number, to:number}>, summaries:number, rawFrom:number, rawTo:number, skipped:number}}
+ */
+export function backfillPlan(chat, mh, o) {
+    const from = Math.max(0, o.from ?? 0);
+    const until = Math.min(o.until, chat?.length ?? 0);
+    const summaryChars = o.summaryChars ?? 9000;
+    const parts = [];
+    let covered = from;
+    let summaries = 0;
+    if (mh && until > from) {
+        const lines = [];
+        if (from === 0 && String(mh.overview ?? '').trim()) lines.push({ text: `Overview: ${cleanMessage(mh.overview)}`, range: null });
+        const mems = (mh.memories ?? []).filter(m => String(m?.text ?? '').trim()).sort((a, b) => (a.start ?? 0) - (b.start ?? 0));
+        for (const m of mems) {
+            const foreign = !!m.origin?.chat && m.origin.chat !== o.chatId;
+            const local = !foreign && Number.isInteger(m.start) && Number.isInteger(m.end) && m.end >= 0;
+            if (local && (m.end < from || m.start >= until)) continue;
+            if (foreign && from > 0) continue; // earlier chapters were read on the first backfill
+            const label = local ? `#${m.start}–${m.end}` : '(earlier chapter)';
+            lines.push({ text: `${label} ${m.title ?? ''}: ${cleanMessage(m.text)}`, range: local ? [m.start, Math.min(m.end, until - 1)] : null });
+            if (local) covered = Math.max(covered, Math.min(m.end + 1, until));
+            summaries++;
+        }
+        let cur = null;
+        for (const l of lines) {
+            if (!cur || (cur.text.length + l.text.length > summaryChars && cur.text)) { cur = { kind: 'summary', text: '', ranges: [] }; parts.push(cur); }
+            cur.text += (cur.text ? '\n' : '') + l.text;
+            if (l.range) cur.ranges.push(l.range);
+        }
+    }
+    // raw messages that no summary covers
+    const idx = [];
+    for (let i = covered; i < until; i++) if (chat[i] && !chat[i].is_system && cleanMessage(chat[i].mes)) idx.push(i);
+    const lens = idx.map(i => cleanMessage(chat[i].mes).length + 20);
+    const total = lens.reduce((a, b) => a + b, 0);
+    const maxParts = o.maxParts ?? 20;
+    const chunkChars = Math.min(o.maxChunkChars ?? 24000, Math.max(o.chunkChars ?? 6000, Math.ceil(total / maxParts)));
+    const chunks = [];
+    let start = null, size = 0;
+    for (let k = 0; k < idx.length; k++) {
+        if (start == null) { start = idx[k]; size = 0; }
+        size += lens[k];
+        if (size >= chunkChars || k === idx.length - 1) { chunks.push({ kind: 'chat', from: start, to: idx[k] }); start = null; }
+    }
+    const kept = chunks.slice(-maxParts);
+    parts.push(...kept);
+    return { parts, summaries, rawFrom: kept[0]?.from ?? null, rawTo: kept[kept.length - 1]?.to ?? null, skipped: chunks.length - kept.length };
+}
+
+/** "msg" from the model for a backfill part: a message number inside what the part covered, else null. */
+export function backfillRef(part, msg, chat) {
+    if (msg == null || String(msg).trim() === '') return null; // Number(null) would be 0
+    const n = Number(msg);
+    if (!Number.isInteger(n) || n < 0 || n >= (chat?.length ?? 0)) return null;
+    const inside = part.kind === 'chat' ? n >= part.from && n <= part.to : part.ranges.some(([a, b]) => n >= a && n <= b);
+    return inside ? { msgId: n, swipeId: chat[n]?.swipe_id ?? 0 } : null;
+}
