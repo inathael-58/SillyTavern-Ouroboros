@@ -7,6 +7,7 @@ import {
     parseJsonLoose, cleanMessage, recentTranscript, pickSecretTropes, stats, nextFateId, lockIfDue,
     carryState, secretsByTiming, backfillPlan, backfillUntil, backfillRef,
     mergeSecrets, applyScoutSecrets, activeSecrets, secretView,
+    tonesFor, sameToneBirth, looksLikeRefusal, intensityOf,
 } from '../lib.js';
 
 /** A chat of n visible messages, alternating user/bot, starting with a bot greeting. */
@@ -446,4 +447,46 @@ test('deleting messages and carrying to a new chat keep secret records consisten
     trimToChat(st, chatOf(30));
     assert.equal(st.secrets[0].clues.length, 0);
     assert.equal(st.secrets[0].learned.length, 0);
+});
+
+// ---------------------------------------------------------------- v0.5: guards against a model's habits
+
+test('tones are assigned by intensity and a respawn fills the missing tone', () => {
+    const st = newState({ size: 'medium', intensity: 'real' });
+    assert.deepEqual(tonesFor(st, 'main', 3), ['bittersweet', 'dark', 'bright']);
+    applyArchitect(st, { fates: [fate('a', { tone: 'bittersweet' }), fate('b', { tone: 'DARK' }), fate('c', { tone: 'bright' })] }, { at: 2, prog: progressOf(st, chatOf(2)) });
+    assert.equal(st.fates[1].tone, 'dark', 'tone is normalised');
+    st.fates[1].status = 'pruned';
+    assert.deepEqual(tonesFor(st, 'main', 1), ['dark'], 'the gap left by the pruned dark fate');
+    assert.deepEqual(tonesFor(newState({ intensity: 'dark' }), 'main', 2), ['dark', 'bittersweet']);
+    assert.equal(newState({ intensity: 'nonsense' }).intensity, 'real');
+});
+
+test('a birth where every fate came back the same tone is caught', () => {
+    assert.equal(sameToneBirth([{ tone: 'bright' }, { tone: 'bright' }], ['bittersweet', 'dark']), true);
+    assert.equal(sameToneBirth([{ tone: 'bright' }, { tone: 'dark' }], ['bittersweet', 'dark']), false);
+    assert.equal(sameToneBirth([{ tone: 'bright' }, {}], ['bittersweet', 'dark']), false, 'missing tones are not judged');
+    assert.equal(sameToneBirth([{ tone: 'dark' }, { tone: 'dark' }], ['dark', 'dark']), false, 'it was asked for one tone');
+});
+
+test('refusals are told apart from JSON answers', () => {
+    assert.ok(looksLikeRefusal("I'm sorry, but I can't help with that request."));
+    assert.ok(looksLikeRefusal('I cannot continue this story as it violates content policy.'));
+    assert.ok(looksLikeRefusal('ขออภัย ฉันไม่สามารถเขียนเนื้อหานี้ได้'));
+    assert.ok(!looksLikeRefusal('{"fates":[], "note": "I can\'t decide"}'), 'JSON answers are never refusals');
+    assert.ok(!looksLikeRefusal(''));
+    assert.ok(!looksLikeRefusal('Here is the plan.'));
+});
+
+test('no-rush ignores "faster"; the writer gets the intensity line until the climax', () => {
+    const st = newState({ size: 'medium', intensity: 'dark' });
+    const prog = progressOf(st, chatOf(10));
+    applyArchitect(st, { pace: 'faster' }, { at: 10, prog, noRush: true });
+    assert.equal(st.shift, 0);
+    applyArchitect(st, { pace: 'faster' }, { at: 10, prog });
+    assert.equal(st.shift, -0.05);
+    assert.match(buildInjection(st, chatOf(40)), new RegExp(intensityOf('dark').writer.slice(0, 20)));
+    assert.match(buildInjection(st, chatOf(40)), /do not resolve the central conflict/);
+    assert.doesNotMatch(buildInjection(st, chatOf(140)), /losses stick/, 'no brake during the climax and after');
+    assert.doesNotMatch(buildInjection(newState({ intensity: 'soft' }), chatOf(4)), /losses stick|Problems linger/);
 });

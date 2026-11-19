@@ -31,10 +31,10 @@ export const SPAWN_UNTIL = 0.45;
 // ---------------------------------------------------------------- phases
 
 export const PHASES = Object.freeze([
-    { id: 'setup', label: 'ปูเรื่อง', from: 0, guide: 'Setup: establish the world, the characters and small mysteries. Plant details; explain nothing.' },
-    { id: 'rising', label: 'ไต่ระดับ', from: 0.15, guide: 'Rising action: raise the pressure, add complications, deepen the mysteries. No big reveals yet.' },
-    { id: 'midpoint', label: 'จุดเปลี่ยน', from: 0.45, guide: 'Midpoint: a turn that changes how things look. A partial revelation is fine.' },
-    { id: 'crisis', label: 'วิกฤต', from: 0.55, guide: 'Crisis: stakes peak and things go wrong. Pull the threads tighter toward the truth.' },
+    { id: 'setup', label: 'ปูเรื่อง', from: 0, guide: 'Setup: establish the world, the characters and small mysteries. Plant details; explain nothing; resolve nothing important.' },
+    { id: 'rising', label: 'ไต่ระดับ', from: 0.15, guide: 'Rising action: raise the pressure, add complications, deepen the mysteries. No big reveals yet, and do not resolve the central conflict: let problems linger and cost something.' },
+    { id: 'midpoint', label: 'จุดเปลี่ยน', from: 0.45, guide: 'Midpoint: a turn that changes how things look. A partial revelation is fine; the central conflict stays open.' },
+    { id: 'crisis', label: 'วิกฤต', from: 0.55, guide: 'Crisis: stakes peak and things go wrong. Pull the threads tighter toward the truth. No rescue, no easy fix yet.' },
     { id: 'climax', label: 'ไคลแมกซ์', from: 0.75, guide: 'Climax: the confrontation. Pay off the planted threads; the truth comes out.' },
     { id: 'resolution', label: 'คลี่คลาย', from: 0.9, guide: 'Resolution: the aftermath. Close the remaining threads and echo the beginning.' },
 ]);
@@ -63,6 +63,73 @@ export const TROPES = Object.freeze({
 });
 export const TROPE_CATEGORIES = Object.keys(TROPES);
 export const MOODS = Object.freeze(['มืด', 'มีหวัง', 'โศก', 'อบอุ่น', 'หักมุมแรง', 'ลึกลับ', 'โรแมนติก', 'ตลก']);
+
+// ---------------------------------------------------------------- intensity and tones (guards against a model's habits)
+
+/**
+ * How hard the story may hit. Fiction framing only: it sets genre expectations, it never asks a model to
+ * drop its own safety rules.
+ * tones: the tones new fates are asked to take, in order (code assigns them, so the fates really differ).
+ */
+export const INTENSITY = Object.freeze({
+    soft: {
+        label: 'นุ่มนวล', hint: 'อบอุ่น ความขัดแย้งคลี่คลายด้วยความเข้าใจได้',
+        architect: 'Gentle story: real problems with warm stakes. Conflicts may resolve through understanding, but each fate still needs a genuine secret and a turn the player will not see coming.',
+        writer: '',
+        tones: ['bright', 'bittersweet', 'bright'],
+    },
+    real: {
+        label: 'สมจริง', hint: 'ชัยชนะมีราคา ไม่จบด้วย "เข้าใจผิดกัน"',
+        architect: 'Real stakes. No fate may hinge on "it was all a misunderstanding" or "everyone was good all along". Victories cost something; antagonists act on real motives and do not redeem easily; mistakes have consequences that stay.',
+        writer: 'Problems linger and cost something; do not soften consequences or let a conflict dissolve on its own.',
+        tones: ['bittersweet', 'dark', 'bright'],
+    },
+    dark: {
+        label: 'มืดหม่น', hint: 'มีการสูญเสียจริง คนร้ายร้ายจริง',
+        architect: 'Grim story. At least one fate ends with a real, lasting loss. Villains can be truly villainous, betrayals land, and hope, where there is any, is paid for. No rescue at the last second unless it costs dearly.',
+        writer: 'Do not rescue characters from consequences; losses stick and betrayals hurt.',
+        tones: ['dark', 'bittersweet', 'dark'],
+    },
+});
+export const INTENSITY_IDS = Object.keys(INTENSITY);
+export const intensityOf = id => INTENSITY[id] ?? INTENSITY.real;
+export const TONES = Object.freeze({ bright: 'สดใส', bittersweet: 'ขมหวาน', dark: 'มืด' });
+export const normTone = t => (TONES[String(t ?? '').toLowerCase()] ? String(t).toLowerCase() : '');
+
+/**
+ * Tones to ask for when the Architect adds `room` fates to a layer: the intensity's list, skipping tones
+ * the living fates of that layer already cover, so a respawn fills the gap.
+ */
+export function tonesFor(st, layer, room) {
+    if (room <= 0) return [];
+    const order = intensityOf(st.intensity).tones;
+    const have = alive(st, layer).map(f => f.tone).filter(Boolean);
+    const out = [];
+    for (const t of [...order, ...order]) {
+        if (out.length >= room) break;
+        const left = have.indexOf(t);
+        if (left >= 0) { have.splice(left, 1); continue; }
+        out.push(t);
+    }
+    while (out.length < room) out.push(order[out.length % order.length]);
+    return out;
+}
+
+/** New fates of one layer that all came back with the same tone (when 2+ were asked for different tones). */
+export function sameToneBirth(fates, asked) {
+    const tones = (fates ?? []).map(f => normTone(f?.tone));
+    if (tones.length < 2 || tones.some(t => !t)) return false;
+    if (new Set(asked).size < 2) return false;
+    return new Set(tones).size === 1;
+}
+
+/** A model answer that is a refusal rather than the JSON we asked for. */
+export function looksLikeRefusal(text) {
+    const t = String(text ?? '').trim();
+    if (!t) return false;
+    if (/\{[\s\S]*\}/.test(t)) return false; // it answered with JSON after all
+    return /\b(I can(?:not|'t|’t)|I(?:'m| am) (?:not able|unable)|I won(?:'t|’t)|cannot (?:help|assist|comply|continue)|can(?:'t|’t) (?:help|assist|comply|continue) with|against (?:my|the) (?:guidelines|policies|policy)|content polic(?:y|ies)|I'm sorry, but|I apologize, but)\b|ขออภัย[^\n]{0,40}(?:ไม่สามารถ|ไม่อาจ)|ไม่สามารถ(?:ช่วย|ดำเนินการ|เขียน)[^\n]{0,20}(?:ได้|นี้)/i.test(t);
+}
 
 /** Pick n secret tropes from the chosen categories (rand injectable for tests). */
 export function pickSecretTropes(categories, n = 2, rand = Math.random) {
@@ -101,6 +168,7 @@ export function newState(o = {}, rand = Math.random) {
         tropes: [...new Set((o.tropes ?? []).map(t => String(t).trim()).filter(Boolean))],
         secretTropes: secretCats.length ? { categories: secretCats, picked: pickSecretTropes(secretCats, 2, rand), peek: 0 } : null,
         moods: (o.moods ?? []).filter(m => MOODS.includes(m)),
+        intensity: INTENSITY[o.intensity] ? o.intensity : 'real',
         startedAt: Math.max(0, Number(o.startedAt) || 0),
         cycle: 1,
         past: [],
@@ -346,7 +414,7 @@ export function markHerrings(st) {
  * @param {{at:number, prog:object}} o at = chat length when asked
  * @returns {{added:string[], pruned:string[], locked:string[], changed:boolean}}
  */
-export function applyArchitect(st, out, { at, prog }) {
+export function applyArchitect(st, out, { at, prog, noRush = false }) {
     const res = { added: [], pruned: [], locked: [], changed: false };
     if (!out || typeof out !== 'object') return res;
     const lays = layers(st);
@@ -384,7 +452,7 @@ export function applyArchitect(st, out, { at, prog }) {
             arc: layer === 'arc' ? st.arc.index : null,
             cycle: st.cycle,
             truth: str(raw.truth), twists: strList(raw.twists, 4), ending: str(raw.ending),
-            scent: str(raw.scent, 40), shadow: str(raw.shadow, 200), needs: strList(raw.needs, 12),
+            scent: str(raw.scent, 40), shadow: str(raw.shadow, 200), needs: strList(raw.needs, 12), tone: normTone(raw.tone),
             score: Number.isFinite(Number(raw.score)) ? clamp(Math.round(Number(raw.score)), 0, 100) : 50,
             lowStreak: 0, status: 'alive', bornAt: at, prunedAt: null, pruneReason: '', lockedAt: null, peek: 0,
         });
@@ -422,7 +490,7 @@ export function applyArchitect(st, out, { at, prog }) {
     if (Array.isArray(out.focus)) st.focus = strList(out.focus, 3).filter(id => st.seeds.some(s => s.id === id));
     if (Array.isArray(out.secrets)) mergeSecrets(st, out.secrets);
     if (out.pace === 'slower') st.shift = clamp((st.shift || 0) + 0.05, -0.1, 0.1);
-    else if (out.pace === 'faster') st.shift = clamp((st.shift || 0) - 0.05, -0.1, 0.1);
+    else if (out.pace === 'faster' && !noRush) st.shift = clamp((st.shift || 0) - 0.05, -0.1, 0.1);
     if (typeof out.arcSummary === 'string' && out.arcSummary.trim()) st.arcSummaryDraft = str(out.arcSummary, 600);
     st.lastArchitectAt = at;
     return res;
@@ -706,6 +774,8 @@ export function buildInjection(st, chat, template = DEFAULT_TEMPLATE) {
     let phase = `Story phase: ${phaseInfo(prog.phase).guide} (about ${pct}% through${size.arcs ? ` act ${st.arc.index}` : ''})`;
     if (size.arcs && prog.mainPhase !== prog.phase) phase += `\nThe story as a whole is in its ${prog.mainPhase} phase.`;
     if (prog.done) phase += '\nThe planned length is reached: steer toward a satisfying close.';
+    const tone = !['climax', 'resolution'].includes(prog.phase) ? intensityOf(st.intensity).writer : '';
+    if (tone) phase += `\n${tone}`;
     const beat = st.beat ? `Next beat: ${st.beat}` : '';
     const focus = pickFocus(st, chat, prog);
     const seeds = focus.length ? `Threads worth picking up (weave them in subtly, no exposition):\n${focus.map(s => `- ${s.text}`).join('\n')}` : '';
