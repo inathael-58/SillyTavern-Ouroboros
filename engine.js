@@ -10,12 +10,13 @@ import {
     liveSeeds, addSeeds, paySeeds, trimToChat, applyArchitect, advanceArc, countBotSince, recentTranscript,
     cleanMessage, parseJsonLoose, SEED_KINDS, secretsByTiming, backfillPlan, backfillUntil, backfillRef,
     applyScoutSecrets, activeSecrets, intensityOf, tonesFor, sameToneBirth, TONES,
+    shapeOf, CANON, normProtected, PROTECT_RULES, onStageNames, breaksProtection,
 } from './lib.js';
 
 const LOG = '[Ouroboros]';
 const ctx = () => SillyTavern.getContext();
 
-/** @type {{settings:()=>any, state:()=>any, save:()=>void, changed:()=>void, generating:()=>boolean, chatId:()=>string, diag:(m:string)=>void, onLeak:(info:{msgId:number, swipeId:number, chatId:string})=>void}} */
+/** @type {{settings:()=>any, state:()=>any, save:()=>void, changed:()=>void, generating:()=>boolean, chatId:()=>string, diag:(m:string)=>void, onLeak:(info:{msgId:number, swipeId:number, chatId:string})=>void, lore:()=>Array<{title:string, content:string}>}} */
 let host;
 export const status = { busy: null, lastOk: null, lastError: null, queued: [], progress: '' };
 
@@ -83,6 +84,8 @@ export function weaveNow(reason = 'manual') {
 }
 
 // ---------------------------------------------------------------- shared prompt parts
+
+const clip = (t, n) => (t.length > n ? t.slice(0, n) + '…' : t);
 
 function storyLanguageHint() {
     return 'Write every text field in the same language the story is written in.';
@@ -277,7 +280,8 @@ export function architectDue(st, chat, s) {
     const prog = progressOf(st, chat);
     const size = sizeOf(st.size);
     for (const l of layers(st)) {
-        if (!lockedFate(st, l) && alive(st, l).length === 0) return 'birth';
+        // open world: the main story is not born on schedule, it emerges on a later pass
+        if (!lockedFate(st, l) && alive(st, l).length === 0 && !(l === 'main' && st.shape === 'sandbox')) return 'birth';
         const point = lockPoint(st, l);
         if (point != null && !lockedFate(st, l) && layerProgress(st, prog, l) >= point) return 'lock';
     }
@@ -311,6 +315,7 @@ Rules:
 - "beat" is one short, concrete suggestion for the next scene, written so it never gives away a truth.
 - The story writer may tend to soften things or resolve conflicts too early. If something was resolved too easily, do not mark the darker fates "contradicted" for that alone: find the price that easy win carries, or what it hid. "contradicted" means the fate can no longer be true at all.
 - This is fiction. Keep the player's chosen intensity even if your own habit is to make things nicer or wrap them up quickly.
+- Never decide whom the player's character ends up with, loves or chooses. Endings are about the world, the secrets and the other characters, not the player's romantic choice.
 You answer with JSON only.`;
 
 function fateForPrompt(f) {
@@ -350,8 +355,20 @@ async function runArchitect(reason) {
     ].filter(Boolean).join('\n');
 
     const intensity = intensityOf(st.intensity);
+    const shape = shapeOf(st.shape);
+    const prot = normProtected(st.protected);
+    const lore = (host.lore?.() ?? []).slice(0, 40);
+    const stage = onStageNames(chat, [...lore.map(l => l.title), ...(st.threads ?? []).map(t => t.name)]);
+    const shapeRules = {
+        story: '',
+        sandbox: 'OPEN WORLD. The player roams; there is no set goal. Acts are local situations rooted where the player is now. Do not pull the player back to one plot. A main story only exists once threads from different acts truly connect.',
+        cast: `BIG CAST${st.canon === 'canon' ? ' (CANON)' : ' (AU ALLOWED)'}. Centre fates on characters who have appeared in this story; bring in an absent character only as a twist rooted in planted seeds. ${st.canon === 'canon' ? 'Hidden truths must live in the gaps of canon: never contradict established canon facts about these characters or this world.' : 'You may twist canon. The more a fan is surprised while the story stays consistent with itself, the better.'}`,
+        harem: 'SEVERAL LOVE INTERESTS. Spread the secrets: each important character gets a storyline of their own, so nobody is just decoration. Never decide whom the player ends up with.',
+    }[st.shape] ?? '';
     const wishes = [
+        shapeRules ? `Shape: ${shapeRules}` : '',
         `Intensity: ${intensity.architect}`,
+        prot.length ? `PROTECTED CHARACTERS (no fate, twist or secret may break these): ${prot.map(p => `${p.name} (${Object.keys(PROTECT_RULES).filter(r => p[r]).map(r => ({ villain: 'never the villain', death: 'never dies', betray: 'never betrays' })[r]).join(', ')})`).join('; ')}` : '',
         st.moods?.length ? `Wished moods: ${st.moods.join(', ')}` : 'Wished moods: none given.',
         st.premise ? `Player's rough premise (an ingredient, not an order; fates may use or twist it): ${st.premise}` : '',
         st.tropes?.length ? `Tropes the player likes (ingredients): ${st.tropes.join(', ')}` : '',
@@ -370,12 +387,17 @@ async function runArchitect(reason) {
     const tasks = [];
     const askedTones = Object.fromEntries(lays.map(l => [l, tonesFor(st, l, room[l])]));
     for (const l of lays) {
-        if (room[l] > 0) tasks.push(`Create ${room[l]} new fate(s) for layer "${l}"${l === 'arc' ? ` (a self-contained mystery or conflict for act ${st.arc.index}, resolvable within it)` : ' (the deepest secret of the whole story)'}, one per tone, in this order: ${askedTones[l].map((t, i) => `fate ${i + 1} "${t}"`).join(', ')} ("bright" = ends well, earned; "bittersweet" = a win that costs; "dark" = a real loss or a betrayal that lands). Give each "id" a new letter, "layer":"${l}", "tone", "truth", up to 3 "twists", "ending", "scent" (ONE word naming its theme), "shadow" (one vague, evocative sentence that hints without revealing), "needs" (ids of seeds it would pay off) and a "score".`);
+        const what = l === 'arc'
+            ? (st.shape === 'sandbox' ? ` (a local situation rooted where the player is now, for act ${st.arc.index}, resolvable within it)` : ` (a self-contained mystery or conflict for act ${st.arc.index}, resolvable within it)`)
+            : (st.shape === 'sandbox' && alive(st, 'main').length === 0 ? ' (the bigger story that connects threads from different acts; create these ONLY if seeds from at least two acts truly point at one hidden thing, otherwise create none this pass)' : ' (the deepest secret of the whole story)');
+        if (room[l] > 0) tasks.push(`Create ${room[l]} new fate(s) for layer "${l}"${what}, one per tone, in this order: ${askedTones[l].map((t, i) => `fate ${i + 1} "${t}"`).join(', ')} ("bright" = ends well, earned; "bittersweet" = a win that costs; "dark" = a real loss or a betrayal that lands). Give each "id" a new letter, "layer":"${l}", "tone", "truth", up to 3 "twists", "ending", "scent" (ONE word naming its theme), "shadow" (one vague, evocative sentence that hints without revealing), "needs" (ids of seeds it would pay off) a "score", and "harm" (every named character this fate makes the villain, kills or turns traitor, as [{"name","role"}] with role "villain", "dies" or "betrays"; [] if none).`);
     }
     if (live.length) tasks.push('For every living or locked fate listed, return {"id","score","contradicted","reason"} and, if useful, refined "twists"/"ending"/"needs". Do not change a locked fate\'s truth.');
     tasks.push('"seedFates": for each open seed, the fate ids that could use it.');
     tasks.push('"focus": up to 3 open seed ids the writer should touch soon. Near the climax include at least one seed from the setup phase, so the ending echoes the beginning.');
-    tasks.push(`"beat": the next scene's direction for the ${prog.phase} phase, one sentence, no spoilers.`);
+    if (st.shape === 'sandbox') tasks.push('"hooks": two or three openings the world could offer next (a rumour, a stranger, a strange sight), each one sentence; the player may take or ignore them. Also give "beat" as one sentence, no spoilers.');
+    else tasks.push(`"beat": the next scene's direction for the ${prog.phase} phase, one sentence, no spoilers.`);
+    if (shape.threads) tasks.push(`"threads": a storyline for each important character (up to 5, characters on stage first${st.shape === 'harem' ? ', every love interest gets one' : ''}), as [{"name","want" (what they want),"secret" (what they hide; keep it once set),"next" (one small thing that could happen to them next),"status" ("open" or "resolved")}]. Respect the protected characters.`);
     tasks.push('"pace": "slower" if the story is not ready for its next phase yet, "faster" if it is ahead, else "keep".');
     if (lays.some(l => lockedFate(st, l))) {
         const missing = lays.filter(l => lockedFate(st, l) && !secretsNow.some(v => v.layer === l));
@@ -387,12 +409,15 @@ async function runArchitect(reason) {
         `PLAN\n${plan}`,
         wishes ? `PLAYER WISHES\n${wishes}` : '',
         `CHARACTERS\n${characterBlock()}`,
+        lore.length ? `LORE IN PLAY (lorebook entries active in recent turns)\n${clip(lore.map(l => `- ${l.title}: ${cleanMessage(l.content)}`).join('\n'), 4000)}` : '',
+        stage.length ? `ON STAGE RECENTLY: ${stage.join(', ')}` : '',
+        shape.threads && st.threads?.length ? `CHARACTER THREADS\n${st.threads.map(t => `${t.name} [${t.status}] wants: ${t.want} | hides: ${t.secret} | next: ${t.next}`).join('\n')}` : '',
         past ? `PAST\n${past}` : '',
         mh ? `EARLIER IN THIS CHAT (summaries)\n${mh}` : '',
         `CURRENT FATES\n${live.length ? JSON.stringify(live.map(fateForPrompt)) : 'none yet'}`,
         secretsNow.length ? `AUTHOR'S NOTEBOOK (secrets of the locked fates, as the story stands)\n${secretsNow.map(v => `${v.id} [${v.layer}${v.revealed ? ', REVEALED' : ''}] ${v.text} | hidden from: ${v.unknownTo.join(', ') || 'nobody now'}${v.learned.length ? ` | found out: ${v.learned.join(', ')}` : ''} | clues planted: ${v.clues.length}${v.clues.length ? ` (last: ${v.clues[v.clues.length - 1].text})` : ''}`).join('\n')}` : '',
         pruned.length ? `DISCARDED FATES (do not bring them back as they were)\n${pruned.map(f => `${f.id}: ${f.truth}`).join('\n')}` : '',
-        `SEEDS (planted threads)\n${seeds.length ? seeds.map(x => `${x.id} [${x.kind}, planted in ${x.phase}, ${x.status}${x.user ? ', added by the player: weigh it more' : ''}${x.fates?.length ? `, fates ${x.fates.join('/')}` : ''}]: ${x.text}`).join('\n') : 'none yet'}`,
+        `SEEDS (planted threads)\n${seeds.length ? seeds.map(x => `${x.id} [${x.kind}, planted in ${x.phase}${size.arcs && x.arc ? ` of act ${x.arc}` : ''}, ${x.status}${x.user ? ', added by the player: weigh it more' : ''}${x.fates?.length ? `, fates ${x.fates.join('/')}` : ''}]: ${x.text}`).join('\n') : 'none yet'}`,
         `RECENT STORY\n${transcript}`,
         `TASK (reason for this pass: ${reason})\n${tasks.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n${storyLanguageHint()}\nAnswer with JSON only:\n{"fates":[…],"seedFates":{"s1":["A"]},"focus":["s1"],"beat":"…","pace":"keep","secrets":[],"arcSummary":""}`,
     ].filter(Boolean).join('\n\n');
@@ -404,8 +429,9 @@ async function runArchitect(reason) {
         accept: out => {
             const j = parseJsonLoose(out);
             if (!j || typeof j !== 'object') throw new Error('ผู้ทอชะตาตอบไม่เป็น JSON');
-            const needBirth = lays.some(l => room[l] > 0 && alive(st, l).length === 0);
+            const needBirth = lays.some(l => room[l] > 0 && alive(st, l).length === 0 && !(l === 'main' && st.shape === 'sandbox'));
             if (needBirth && !(Array.isArray(j.fates) && j.fates.some(f => f?.truth))) throw new Error('ผู้ทอชะตาไม่ได้เขียนชะตา');
+            if (needBirth && prot.length && j.fates.filter(f => f?.truth).every(f => breaksProtection(f, prot))) throw new Error('ชะตาทุกทางแตะตัวละครที่ห้ามแตะ');
             // fates asked for different tones that all came back the same: one more try, then take what came
             if (++toneTries < 2) for (const l of lays) {
                 const born = (Array.isArray(j.fates) ? j.fates : []).filter(f => f?.truth && (f.layer ?? lays[0]) === l && !st.fates.some(x => x.id === String(f.id ?? '') && x.status !== 'pruned'));
@@ -419,6 +445,7 @@ async function runArchitect(reason) {
     if (host.chatId() !== chatId || host.state() !== st) return;
     const res = applyArchitect(st, value, { at, prog, noRush: !!s.noRush });
     if (usedBackup) host.diag(`architect used the backup API (${reason})`);
+    if (res.blocked?.length) host.diag(`blocked ${res.blocked.length} fate(s) that broke a protection`);
     const after = progressOf(st, chat);
     st.lastPhase = `${after.mainPhase}/${after.phase}`;
     st.lastWeave = { at: Date.now(), reason, added: res.added.length, pruned: res.pruned.length, locked: res.locked.length };

@@ -386,3 +386,10 @@ body.reduced-motion #ouro_launcher i { animation: none !important; }
 .ouro-secret.is-out { border-left-color: var(--ouro-line); }
 .ouro-segs.ouro-segs-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 @media (max-width: 420px) { .ouro-segs.ouro-segs-3 { grid-template-columns: minmax(0, 1fr); } }
+.ouro-segs.ouro-segs-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ouro-prots { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.ouro-prot { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 0; border-top: 1px solid var(--ouro-line); }
+.ouro-prot:first-child { border-top: 0; }
+.ouro-prot > b { flex: 1 1 100%; }
+.ouro-prot > .ouro-chips { flex: 1 1 0; min-width: 0; }
+.ouro-prot .ouro-chip { font-size: 0.8em; padding: 3px 10px; }

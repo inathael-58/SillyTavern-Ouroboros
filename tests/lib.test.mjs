@@ -8,6 +8,7 @@ import {
     carryState, secretsByTiming, backfillPlan, backfillUntil, backfillRef,
     mergeSecrets, applyScoutSecrets, activeSecrets, secretView,
     tonesFor, sameToneBirth, looksLikeRefusal, intensityOf,
+    mainGateOpen, breaksProtection, normProtected, mergeThreads, onStageNames,
 } from '../lib.js';
 
 /** A chat of n visible messages, alternating user/bot, starting with a bot greeting. */
@@ -489,4 +490,63 @@ test('no-rush ignores "faster"; the writer gets the intensity line until the cli
     assert.match(buildInjection(st, chatOf(40)), /do not resolve the central conflict/);
     assert.doesNotMatch(buildInjection(st, chatOf(140)), /losses stick/, 'no brake during the climax and after');
     assert.doesNotMatch(buildInjection(newState({ intensity: 'soft' }), chatOf(4)), /losses stick|Problems linger/);
+});
+
+// ---------------------------------------------------------------- v0.6: story shapes
+
+test('open world: open-ended acts, no main story until an act has finished', () => {
+    const st = newState({ shape: 'sandbox', size: 'short' });
+    assert.equal(st.size, 'epic', 'open world always runs open-ended acts');
+    const prog = progressOf(st, chatOf(4));
+    assert.equal(mainGateOpen(st), false);
+    assert.equal(spawnRoom(st, prog, 'main'), 0);
+    assert.equal(spawnRoom(st, prog, 'arc'), 2, 'local acts start right away');
+    st.arc.index = 2;
+    assert.equal(spawnRoom(st, progressOf(st, chatOf(4)), 'main'), 3, 'the main story may emerge after act 1');
+    addSeeds(st, [{ text: 'สัญลักษณ์งูบนประตู' }], { msgId: 2 }, 'setup');
+    assert.equal(st.seeds[0].arc, 2, 'seeds remember their act');
+});
+
+test('open world injection offers hooks instead of a directed beat', () => {
+    const st = newState({ shape: 'sandbox' });
+    applyArchitect(st, { beat: 'ไปที่หอคอย', hooks: ['พ่อค้าแปลกหน้าขายแผนที่', 'มีคนหายในเหมือง'] }, { at: 4, prog: progressOf(st, chatOf(4)) });
+    const t = buildInjection(st, chatOf(4));
+    assert.match(t, /Hooks the world could offer[\s\S]*พ่อค้าแปลกหน้า[\s\S]*มีคนหายในเหมือง/);
+    assert.doesNotMatch(t, /Next beat/);
+});
+
+test('protected characters: a fate that makes them a villain, kills them or has them betray is blocked', () => {
+    const prot = normProtected([{ name: 'Mira' }, { name: 'Lena', death: false }]);
+    assert.equal(breaksProtection({ harm: [{ name: 'mira', role: 'villain' }] }, prot), 'Mira: ห้ามเป็นคนร้าย');
+    assert.equal(breaksProtection({ harm: [{ name: 'Lena', role: 'dies' }] }, prot), '', 'Lena may die');
+    assert.equal(breaksProtection({ harm: [{ name: 'Lena', role: 'betrays' }] }, prot), 'Lena: ห้ามทรยศ');
+    const st = newState({ size: 'medium', protected: prot });
+    const r = applyArchitect(st, { fates: [fate('Mira คือคนร้าย', { harm: [{ name: 'Mira', role: 'villain' }] }), fate('พ่อบ้านคือคนร้าย', { harm: [{ name: 'พ่อบ้าน', role: 'villain' }] })] }, { at: 2, prog: progressOf(st, chatOf(2)) });
+    assert.deepEqual(r.added, ['A']);
+    assert.equal(st.fates[0].truth, 'พ่อบ้านคือคนร้าย');
+    assert.deepEqual(r.blocked, ['Mira: ห้ามเป็นคนร้าย']);
+});
+
+test('character threads merge by name, keep their secret, and reach the writer only for characters on stage', () => {
+    const st = newState({ shape: 'harem' });
+    mergeThreads(st, [{ name: 'Mira', want: 'อยากเป็นอิสระ', secret: 'เป็นลูกของศัตรู', next: 'ถามถึงแหวน' }, { name: 'Lena', want: 'อยากชนะ', secret: 'ป่วยหนัก' }]);
+    mergeThreads(st, [{ name: 'mira', secret: 'อย่างอื่น', next: 'หลบหน้า' }]);
+    assert.equal(st.threads.length, 2);
+    assert.equal(st.threads[0].secret, 'เป็นลูกของศัตรู');
+    assert.equal(st.threads[0].next, 'หลบหน้า');
+    const chat = chatOf(6); // Bot speaks as "Bot"
+    chat[5].mes = 'Mira มองออกไปนอกหน้าต่าง';
+    const t = buildInjection(st, chat);
+    assert.match(t, /Character threads in this scene[\s\S]*- Mira: wants อยากเป็นอิสระ; hides: เป็นลูกของศัตรู; next for them: หลบหน้า/);
+    assert.doesNotMatch(t, /Lena/, 'off-stage characters stay out');
+    assert.equal(buildInjection(newState({ shape: 'story' }), chat).includes('Character threads'), false);
+});
+
+test('onStageNames reads speakers and lore titles in recent text', () => {
+    const chat = chatOf(4);
+    chat[3].name = 'Kai'; chat[3].is_user = true;
+    chat[2].name = 'Narrator'; chat[2].mes = 'Gojo yawns while Megumin watches';
+    const names = onStageNames(chat, ['Gojo', 'Sukuna', 'Megumin']);
+    assert.ok(names.includes('Gojo') && names.includes('Megumin') && names.includes('Narrator'));
+    assert.ok(!names.includes('Sukuna') && !names.includes('Kai'), 'absent lore and the player are left out');
 });

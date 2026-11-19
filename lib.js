@@ -123,6 +123,96 @@ export function sameToneBirth(fates, asked) {
     return new Set(tones).size === 1;
 }
 
+// ---------------------------------------------------------------- story shapes (v0.6)
+
+/**
+ * What kind of bot this is. Each shape changes how the Architect works:
+ * story   one central mystery (the original behaviour)
+ * sandbox open world: no main story at first, local acts where the player goes, a main story that
+ *         emerges once threads from different acts connect; hooks instead of a directed beat
+ * cast    big cast / fandom: fates centre on characters on stage, canon or AU, character threads
+ * harem   several love interests: a thread per character, never picks a partner for the player
+ */
+export const SHAPES = Object.freeze({
+    story: { label: 'เรื่องเดียวจบ', hint: 'มีปมกลาง วางชะตาแล้วล็อก', threads: false },
+    sandbox: { label: 'โลกเปิด', hint: 'เดินเที่ยว เรื่องย่อยตามที่ไป เรื่องใหญ่โผล่เองทีหลัง', threads: false },
+    cast: { label: 'ตัวละครเยอะ', hint: 'แฟนด้อม ชะตาวนรอบตัวที่ออกฉาก', threads: true },
+    harem: { label: 'ฮาเร็ม', hint: 'หลายเส้นความสัมพันธ์ ทุกคนมีเรื่องของตัวเอง', threads: true },
+});
+export const SHAPE_IDS = Object.keys(SHAPES);
+export const shapeOf = id => SHAPES[id] ?? SHAPES.story;
+export const CANON = Object.freeze({ canon: 'ตามแคนนอน', au: 'AU ได้' });
+
+/** Open world: the main story may only be born once an act has finished (or it already exists). */
+export function mainGateOpen(st) {
+    if (st.shape !== 'sandbox') return true;
+    return st.arc.index >= 2 || alive(st, 'main').length > 0 || !!lockedFate(st, 'main');
+}
+
+export const PROTECT_RULES = Object.freeze({ villain: 'ห้ามเป็นคนร้าย', death: 'ห้ามตาย', betray: 'ห้ามทรยศ' });
+const HARM_FOR_RULE = { villain: 'villain', death: 'dies', betray: 'betrays' };
+
+/** Protected characters: [{name, villain, death, betray}] with every rule on by default. */
+export function normProtected(list) {
+    return (Array.isArray(list) ? list : [])
+        .map(p => ({ name: str(p?.name, 60), villain: p?.villain !== false, death: p?.death !== false, betray: p?.betray !== false }))
+        .filter(p => p.name);
+}
+
+/** Does a fate break a protection? Uses the "harm" roles the Architect lists ({name, role}). */
+export function breaksProtection(fate, protectedList) {
+    const harms = Array.isArray(fate?.harm) ? fate.harm : [];
+    for (const p of normProtected(protectedList)) {
+        for (const [rule, role] of Object.entries(HARM_FOR_RULE)) {
+            if (!p[rule]) continue;
+            if (harms.some(h => String(h?.role ?? '').toLowerCase() === role && sameNameLoose(h?.name, p.name))) return `${p.name}: ${PROTECT_RULES[rule]}`;
+        }
+    }
+    return '';
+}
+function sameNameLoose(a, b) {
+    const x = String(a ?? '').trim().toLowerCase();
+    const y = String(b ?? '').trim().toLowerCase();
+    return !!x && !!y && (x === y || x.includes(y) || y.includes(x));
+}
+
+/**
+ * Character threads (cast and harem): one small storyline per important character.
+ * { name, want, secret, next, status: 'open'|'resolved', peek }
+ */
+export function mergeThreads(st, list) {
+    const cur = Array.isArray(st.threads) ? st.threads : [];
+    for (const raw of Array.isArray(list) ? list : []) {
+        const name = str(raw?.name, 60);
+        if (!name) continue;
+        let t = cur.find(x => sameNameLoose(x.name, name));
+        if (!t) {
+            if (cur.filter(x => x.status !== 'resolved').length >= 6) continue;
+            t = { name, want: '', secret: '', next: '', status: 'open', peek: 0 };
+            cur.push(t);
+        }
+        if (raw.want) t.want = str(raw.want, 200);
+        if (raw.secret && !t.secret) t.secret = str(raw.secret, 300); // a thread's secret, once set, stays
+        if (raw.next !== undefined) t.next = str(raw.next, 200);
+        if (raw.status === 'resolved') t.status = 'resolved';
+    }
+    st.threads = cur;
+    return cur;
+}
+
+/** Names seen in the recent chat: message authors, plus lore titles mentioned in the text. */
+export function onStageNames(chat, loreTitles = [], lookback = 20) {
+    const names = new Set();
+    const recent = (chat ?? []).slice(-lookback).filter(m => m && !m.is_system);
+    for (const m of recent) if (m.name && !m.is_user) names.add(String(m.name));
+    const text = recent.slice(-8).map(m => cleanMessage(m.mes)).join('\n').toLowerCase();
+    for (const t of loreTitles) {
+        const k = String(t ?? '').trim();
+        if (k.length >= 2 && text.includes(k.toLowerCase())) names.add(k);
+    }
+    return [...names];
+}
+
 /** A model answer that is a refusal rather than the JSON we asked for. */
 export function looksLikeRefusal(text) {
     const t = String(text ?? '').trim();
@@ -163,12 +253,17 @@ export function newState(o = {}, rand = Math.random) {
     return {
         version: STATE_VERSION,
         owner: o.owner ?? {},
-        size: SIZES[o.size] ? o.size : 'medium',
+        size: o.shape === 'sandbox' ? 'epic' : SIZES[o.size] ? o.size : 'medium',
         premise: String(o.premise ?? '').trim(),
         tropes: [...new Set((o.tropes ?? []).map(t => String(t).trim()).filter(Boolean))],
         secretTropes: secretCats.length ? { categories: secretCats, picked: pickSecretTropes(secretCats, 2, rand), peek: 0 } : null,
         moods: (o.moods ?? []).filter(m => MOODS.includes(m)),
         intensity: INTENSITY[o.intensity] ? o.intensity : 'real',
+        shape: SHAPES[o.shape] ? o.shape : 'story',
+        canon: CANON[o.canon] ? o.canon : 'canon',
+        protected: normProtected(o.protected),
+        threads: [],
+        hooks: [],
         startedAt: Math.max(0, Number(o.startedAt) || 0),
         cycle: 1,
         past: [],
@@ -276,6 +371,7 @@ export const lockedFate = (st, layer) => st.fates.find(f => f.status === 'locked
 /** How many new fates the Architect may add to a layer right now. */
 export function spawnRoom(st, prog, layer) {
     if (lockedFate(st, layer)) return 0;
+    if (layer === 'main' && !mainGateOpen(st)) return 0;
     const want = sizeOf(st.size).fates[layer] ?? 0;
     const have = alive(st, layer).length;
     if (have >= want) return 0;
@@ -347,6 +443,7 @@ export function addSeeds(st, items, ref, phase) {
             msgId: ref?.msgId ?? null,
             swipeId: ref?.swipeId ?? 0,
             phase: phase ?? 'setup',
+            arc: st.arc?.index ?? 1,
             fates: [],
             status: 'open',
             paidBy: null,
@@ -445,6 +542,8 @@ export function applyArchitect(st, out, { at, prog, noRush = false }) {
             continue;
         }
         if (!raw.truth || room[layer] <= 0) continue;
+        const broken = breaksProtection(raw, st.protected);
+        if (broken) { res.blocked = [...(res.blocked ?? []), broken]; continue; }
         room[layer]--;
         const id = nextFateId(st);
         st.fates.push({
@@ -453,6 +552,7 @@ export function applyArchitect(st, out, { at, prog, noRush = false }) {
             cycle: st.cycle,
             truth: str(raw.truth), twists: strList(raw.twists, 4), ending: str(raw.ending),
             scent: str(raw.scent, 40), shadow: str(raw.shadow, 200), needs: strList(raw.needs, 12), tone: normTone(raw.tone),
+            harm: (Array.isArray(raw.harm) ? raw.harm : []).slice(0, 6).map(h => ({ name: str(h?.name, 60), role: str(h?.role, 20) })),
             score: Number.isFinite(Number(raw.score)) ? clamp(Math.round(Number(raw.score)), 0, 100) : 50,
             lowStreak: 0, status: 'alive', bornAt: at, prunedAt: null, pruneReason: '', lockedAt: null, peek: 0,
         });
@@ -487,6 +587,8 @@ export function applyArchitect(st, out, { at, prog, noRush = false }) {
     }
 
     if (typeof out.beat === 'string') st.beat = str(out.beat, 400);
+    if (Array.isArray(out.hooks)) st.hooks = strList(out.hooks, 3).map(h => h.slice(0, 200));
+    if (Array.isArray(out.threads) && shapeOf(st.shape).threads) mergeThreads(st, out.threads);
     if (Array.isArray(out.focus)) st.focus = strList(out.focus, 3).filter(id => st.seeds.some(s => s.id === id));
     if (Array.isArray(out.secrets)) mergeSecrets(st, out.secrets);
     if (out.pace === 'slower') st.shift = clamp((st.shift || 0) + 0.05, -0.1, 0.1);
@@ -776,7 +878,8 @@ export function buildInjection(st, chat, template = DEFAULT_TEMPLATE) {
     if (prog.done) phase += '\nThe planned length is reached: steer toward a satisfying close.';
     const tone = !['climax', 'resolution'].includes(prog.phase) ? intensityOf(st.intensity).writer : '';
     if (tone) phase += `\n${tone}`;
-    const beat = st.beat ? `Next beat: ${st.beat}` : '';
+    let beat = st.beat ? `Next beat: ${st.beat}` : '';
+    if (st.shape === 'sandbox' && st.hooks?.length) beat = `Hooks the world could offer (the player may take or ignore them; never force one):\n${st.hooks.map(h => `- ${h}`).join('\n')}`;
     const focus = pickFocus(st, chat, prog);
     const seeds = focus.length ? `Threads worth picking up (weave them in subtly, no exposition):\n${focus.map(s => `- ${s.text}`).join('\n')}` : '';
     const { hold, free, revealed } = secretsByTiming(st, prog, chat);
@@ -787,7 +890,15 @@ export function buildInjection(st, chat, template = DEFAULT_TEMPLATE) {
         recent.length ? `Already revealed. Keep playing out what each one changes; a revealed truth is never dropped:\n${recent.map(v => `- ${v.text}${v.changes ? ` → ${v.changes}` : ''}${v.unknownTo.length ? ` (still unknown to: ${v.unknownTo.join(', ')})` : ''}`).join('\n')}` : '',
         hold.length || free.length ? 'If the player\'s character reaches the place or person where a hidden truth is kept, they find it. Protect truths by making them hard or costly to reach, never by refusing an answer that is in front of them.' : '',
     ].filter(Boolean).join('\n');
-    const fill = { phase, beat, seeds, secrets };
+    // character threads of the characters on stage (at most two), as part of the seeds block
+    let threadText = '';
+    if (shapeOf(st.shape).threads && st.threads?.length) {
+        const stage = onStageNames(chat, (st.threads ?? []).map(t => t.name)).map(n => n.toLowerCase());
+        const on = st.threads.filter(t => t.status !== 'resolved' && stage.some(n => sameNameLoose(n, t.name))).slice(0, 2);
+        if (on.length) threadText = `Character threads in this scene (each character has their own story; hint at a secret at most):\n${on.map(t => `- ${t.name}${t.want ? `: wants ${t.want}` : ''}${t.secret ? `; hides: ${t.secret}` : ''}${t.next ? `; next for them: ${t.next}` : ''}`).join('\n')}`;
+    }
+    const seedsAll = [seeds, threadText].filter(Boolean).join('\n');
+    const fill = { phase, beat, seeds: seedsAll, secrets };
     const tpl = String(template || DEFAULT_TEMPLATE);
     let text = tpl.replace(/\{\{(phase|beat|seeds|secrets)\}\}/g, (_, k) => fill[k]);
     text = text.replace(/\n{2,}/g, '\n').trim();
