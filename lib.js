@@ -1084,3 +1084,53 @@ export function backfillRef(part, msg, chat) {
     const inside = part.kind === 'chat' ? n >= part.from && n <= part.to : part.ranges.some(([a, b]) => n >= a && n <= b);
     return inside ? { msgId: n, swipeId: chat[n]?.swipe_id ?? 0 } : null;
 }
+
+// ---------------------------------------------------------------- token budget (v0.6.1): what each call gets to read
+
+const seedOrder = s => (Number.isInteger(s.msgId) ? s.msgId : -1) * 1000 + (Number(String(s.id).slice(1)) || 0);
+
+/**
+ * Seeds for the Architect: at most `cap` open seeds, picked by worth (player's own, tied to a living or
+ * locked fate, in focus, from the setup, then newest), plus the few newest paid ones. The rest stay
+ * stored and visible in the panel; they are just not re-sent every pass.
+ * @returns {{seeds:any[], omittedOpen:number, omittedPaid:number}}
+ */
+export function seedsForArchitect(st, chat, { cap = 40, paidCap = 6 } = {}) {
+    const live = liveSeeds(st, chat);
+    const open = live.filter(s => s.status === 'open');
+    const paid = live.filter(s => s.status === 'paid');
+    const fateIds = new Set(st.fates.filter(f => f.status === 'alive' || f.status === 'locked').map(f => f.id));
+    const focus = new Set(st.focus ?? []);
+    const rank = s => (s.user ? 8 : 0) + ((s.fates ?? []).some(id => fateIds.has(id)) ? 4 : 0) + (focus.has(s.id) ? 4 : 0) + (s.phase === 'setup' ? 2 : 0);
+    const keepOpen = [...open].sort((a, b) => rank(b) - rank(a) || seedOrder(b) - seedOrder(a)).slice(0, cap);
+    const keepPaid = [...paid].sort((a, b) => seedOrder(b) - seedOrder(a)).slice(0, paidCap);
+    const keep = new Set([...keepOpen, ...keepPaid].map(s => s.id));
+    return {
+        seeds: live.filter(s => keep.has(s.id)), // story order
+        omittedOpen: open.length - keepOpen.length,
+        omittedPaid: paid.length - keepPaid.length,
+    };
+}
+
+/** Open seeds the Scout checks new ones against: the player's own plus the newest, at most `cap`. */
+export function seedsForScout(st, chat, cap = 30) {
+    const open = liveSeeds(st, chat).filter(s => s.status === 'open');
+    const user = open.filter(s => s.user);
+    const rest = open.filter(s => !s.user).sort((a, b) => seedOrder(b) - seedOrder(a));
+    const keep = new Set([...user, ...rest].slice(0, cap).map(s => s.id));
+    return open.filter(s => keep.has(s.id));
+}
+
+/** Finished acts and earlier cycles: the last few in full, older ones folded into one short line. */
+export function pastLines(st, { fullActs = 3, fullCycles = 2 } = {}) {
+    const lines = [];
+    const cycles = st.past ?? [];
+    const oldCycles = cycles.slice(0, Math.max(0, cycles.length - fullCycles));
+    if (oldCycles.length) lines.push(`Earlier cycles ${oldCycles.map(p => p.cycle).join(', ')} ended with: ${oldCycles.map(p => str(p.truths.join(' / '), 80)).join(' | ')}`);
+    for (const p of cycles.slice(-fullCycles)) lines.push(`Earlier cycle ${p.cycle} ended with: ${p.truths.join(' / ')}`);
+    const acts = st.arc?.summaries ?? [];
+    const oldActs = acts.slice(0, Math.max(0, acts.length - fullActs));
+    if (oldActs.length) lines.push(`Acts ${oldActs[0].index}–${oldActs[oldActs.length - 1].index} (finished, in short): ${oldActs.map(a => str(a.summary, 80)).join(' | ')}`);
+    for (const a of acts.slice(-fullActs)) lines.push(`Act ${a.index} (finished): ${a.summary}`);
+    return lines;
+}
