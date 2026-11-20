@@ -587,6 +587,14 @@ export function applyArchitect(st, out, { at, prog, noRush = false }) {
     }
 
     if (typeof out.beat === 'string') st.beat = str(out.beat, 400);
+    // seeds the story has moved on from: they stop being sent (the player's own and pinned ones never fade)
+    if (Array.isArray(out.stale)) {
+        const used = new Set(st.fates.filter(f => f.status === 'alive' || f.status === 'locked').flatMap(f => f.needs ?? []));
+        for (const id of strList(out.stale, 20)) {
+            const x = st.seeds.find(y => y.id === id);
+            if (x && x.status === 'open' && !x.user && !x.pinned && !used.has(x.id)) { x.faded = true; res.faded = (res.faded ?? 0) + 1; }
+        }
+    }
     if (Array.isArray(out.hooks)) st.hooks = strList(out.hooks, 3).map(h => h.slice(0, 200));
     if (Array.isArray(out.threads) && shapeOf(st.shape).threads) mergeThreads(st, out.threads);
     if (Array.isArray(out.focus)) st.focus = strList(out.focus, 3).filter(id => st.seeds.some(s => s.id === id));
@@ -822,7 +830,7 @@ export const DEFAULT_TEMPLATE = `[Author's private notes. Never mention these no
 
 /** Seeds to hand the writer this turn (max 3). */
 export function pickFocus(st, chat, prog, max = 3) {
-    const live = liveSeeds(st, chat).filter(s => s.status === 'open');
+    const live = liveSeeds(st, chat).filter(s => s.status === 'open' && !s.faded);
     const byId = new Map(live.map(s => [s.id, s]));
     const out = [];
     for (const id of st.focus ?? []) if (byId.has(id) && out.length < max) out.push(byId.get(id));
@@ -1090,33 +1098,54 @@ export function backfillRef(part, msg, chat) {
 const seedOrder = s => (Number.isInteger(s.msgId) ? s.msgId : -1) * 1000 + (Number(String(s.id).slice(1)) || 0);
 
 /**
- * Seeds for the Architect: at most `cap` open seeds, picked by worth (player's own, tied to a living or
- * locked fate, in focus, from the setup, then newest), plus the few newest paid ones. The rest stay
- * stored and visible in the panel; they are just not re-sent every pass.
+ * Seeds for the Architect, at most `cap` open ones:
+ * 1. always: the player's own and pinned seeds;
+ * 2. by worth: tied to a living or locked fate, in focus, from the setup;
+ * 3. `rotate` slots for the seeds shown least recently, so every old seed comes round again and the
+ *    Architect can tie it to a fate, or mark it stale;
+ * 4. the newest fill the rest.
+ * Faded (stale) seeds are left out unless a fate uses them. Plus the few newest paid seeds.
  * @returns {{seeds:any[], omittedOpen:number, omittedPaid:number}}
  */
-export function seedsForArchitect(st, chat, { cap = 40, paidCap = 6 } = {}) {
+export function seedsForArchitect(st, chat, { cap = 40, rotate = 10, paidCap = 6 } = {}) {
     const live = liveSeeds(st, chat);
-    const open = live.filter(s => s.status === 'open');
-    const paid = live.filter(s => s.status === 'paid');
     const fateIds = new Set(st.fates.filter(f => f.status === 'alive' || f.status === 'locked').map(f => f.id));
+    const linked = s => (s.fates ?? []).some(id => fateIds.has(id));
+    const open = live.filter(s => s.status === 'open' && (!s.faded || linked(s)));
+    const paid = live.filter(s => s.status === 'paid');
     const focus = new Set(st.focus ?? []);
-    const rank = s => (s.user ? 8 : 0) + ((s.fates ?? []).some(id => fateIds.has(id)) ? 4 : 0) + (focus.has(s.id) ? 4 : 0) + (s.phase === 'setup' ? 2 : 0);
-    const keepOpen = [...open].sort((a, b) => rank(b) - rank(a) || seedOrder(b) - seedOrder(a)).slice(0, cap);
+    const picked = new Set();
+    const take = (list, n) => { for (const x of list) { if (picked.size >= n) break; picked.add(x.id); } };
+    take(open.filter(x => x.user || x.pinned), cap);
+    const rank = x => (linked(x) ? 4 : 0) + (focus.has(x.id) ? 4 : 0) + (x.phase === 'setup' ? 2 : 0);
+    const worthy = open.filter(x => !picked.has(x.id) && rank(x) > 0).sort((a, b) => rank(b) - rank(a) || seedOrder(b) - seedOrder(a));
+    take(worthy, Math.max(picked.size, cap - rotate));
+    const rest = open.filter(x => !picked.has(x.id));
+    const newestIds = new Set([...rest].sort((a, b) => seedOrder(b) - seedOrder(a)).slice(0, Math.max(0, cap - picked.size - rotate)).map(x => x.id));
+    const dusty = rest.filter(x => !newestIds.has(x.id)).sort((a, b) => (a.lastShown ?? -1) - (b.lastShown ?? -1) || seedOrder(a) - seedOrder(b));
+    take(dusty, Math.min(cap, picked.size + rotate));
+    take([...rest].sort((a, b) => seedOrder(b) - seedOrder(a)), cap);
     const keepPaid = [...paid].sort((a, b) => seedOrder(b) - seedOrder(a)).slice(0, paidCap);
-    const keep = new Set([...keepOpen, ...keepPaid].map(s => s.id));
+    for (const x of keepPaid) picked.add(x.id);
     return {
-        seeds: live.filter(s => keep.has(s.id)), // story order
-        omittedOpen: open.length - keepOpen.length,
+        seeds: live.filter(x => picked.has(x.id)), // story order
+        omittedOpen: open.length - open.filter(x => picked.has(x.id)).length,
         omittedPaid: paid.length - keepPaid.length,
     };
 }
 
+/** Remember which seeds the Architect was shown on this pass (for the rotation). */
+export function markShown(st, seeds) {
+    st.passes = (Number(st.passes) || 0) + 1;
+    const ids = new Set(seeds.map(x => x.id));
+    for (const x of st.seeds) if (ids.has(x.id)) x.lastShown = st.passes;
+}
+
 /** Open seeds the Scout checks new ones against: the player's own plus the newest, at most `cap`. */
 export function seedsForScout(st, chat, cap = 30) {
-    const open = liveSeeds(st, chat).filter(s => s.status === 'open');
-    const user = open.filter(s => s.user);
-    const rest = open.filter(s => !s.user).sort((a, b) => seedOrder(b) - seedOrder(a));
+    const open = liveSeeds(st, chat).filter(s => s.status === 'open' && !s.faded);
+    const user = open.filter(s => s.user || s.pinned);
+    const rest = open.filter(s => !s.user && !s.pinned).sort((a, b) => seedOrder(b) - seedOrder(a));
     const keep = new Set([...user, ...rest].slice(0, cap).map(s => s.id));
     return open.filter(s => keep.has(s.id));
 }

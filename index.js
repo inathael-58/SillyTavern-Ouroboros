@@ -13,7 +13,7 @@ import { normalizeState, buildInjection, trimToChat, DEFAULT_TEMPLATE, progressO
 
 const MODULE = 'ouroboros';
 const LOG = '[Ouroboros]';
-const VERSION = '0.6.1'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.6.2'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'lib.js', 'engine.js', 'panel.js', 'ai.js', 'diag.js', 'launcher.js', 'theme-palette.js', 'style.css', 'manifest.json'];
 
@@ -29,8 +29,8 @@ const DEFAULTS = {
     role: ROLE.SYSTEM,
     template: DEFAULT_TEMPLATE,
     architectBudget: 6000,  // token ของเนื้อเรื่องล่าสุดที่ส่งให้ผู้ทอชะตา (ประมาณ)
-    architectMaxTokens: 2500,
-    scoutMaxTokens: 600,
+    architectMaxTokens: 4000,   // room for thinking models; a cap, not what is spent
+    scoutMaxTokens: 2000,
     timeoutSec: 120,
     leakAction: 'warn',     // warn | swipe | off
     scoutBackup: '',        // '' = none; used when the main API refuses or fails
@@ -50,6 +50,12 @@ function settings() {
     all[MODULE] ??= {};
     const s = all[MODULE];
     for (const [k, v] of Object.entries(DEFAULTS)) if (s[k] === undefined) s[k] = structuredClone(v);
+    // 0.6.2: the old caps left no room for thinking models (DeepSeek v4 pro answered empty); raise untouched defaults
+    if (!s.capsRaised) {
+        if (Number(s.scoutMaxTokens) === 600) s.scoutMaxTokens = DEFAULTS.scoutMaxTokens;
+        if (Number(s.architectMaxTokens) === 2500) s.architectMaxTokens = DEFAULTS.architectMaxTokens;
+        s.capsRaised = true;
+    }
     return s;
 }
 const saveSettings = () => ctx().saveSettingsDebounced();
@@ -294,6 +300,7 @@ function mountSettings() {
           <option value="2" ${Number(s.role) === 2 ? 'selected' : ''}>Assistant</option></select></div>
         <div class="ouro-set-row"><span>เนื้อเรื่องที่ส่งให้ผู้ทอชะตา</span><input id="ouro_budget" type="number" min="1000" max="60000" step="500" class="text_pole" value="${Number(s.architectBudget)}"></div>
         <small class="ouro-set-hint">token โดยประมาณ ข้อความเก่ากว่านี้ใช้สรุปจาก Memory Hub แทน (ถ้าติดตั้งไว้)</small>
+        <div class="ouro-set-row"><span>คำตอบผู้เก็บปมสูงสุด</span><input id="ouro_scout_max" type="number" min="300" max="16000" step="100" class="text_pole" value="${Number(s.scoutMaxTokens)}"></div>
         <div class="ouro-set-row"><span>คำตอบผู้ทอชะตาสูงสุด</span><input id="ouro_arch_max" type="number" min="500" max="16000" step="100" class="text_pole" value="${Number(s.architectMaxTokens)}"></div>
         <div class="ouro-set-row"><span>รอคำตอบนานสุด (วินาที)</span><input id="ouro_timeout" type="number" min="20" max="600" class="text_pole" value="${Number(s.timeoutSec)}"></div>
         <label class="ouro-set-label" for="ouro_template">แม่แบบบันทึกลับ <small>{{phase}} {{beat}} {{seeds}} {{secrets}}</small></label>
@@ -337,6 +344,7 @@ function mountSettings() {
     num('#ouro_depth', 'depth', 0, 50);
     num('#ouro_budget', 'architectBudget', 1000, 60000);
     num('#ouro_arch_max', 'architectMaxTokens', 500, 16000);
+    num('#ouro_scout_max', 'scoutMaxTokens', 300, 16000);
     num('#ouro_timeout', 'timeoutSec', 20, 600);
     $('#ouro_leak').on('change', function () { settings().leakAction = this.value; saveSettings(); });
     $('#ouro_launcher_on').on('change', function () { settings().launcher = this.checked; saveSettings(); renderLauncher(); });
