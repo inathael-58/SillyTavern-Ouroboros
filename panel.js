@@ -429,7 +429,7 @@ function tensionsHtml(st) {
     const list = (st.tensions ?? []).map((t, i) => ({ ...tensionView(chat(), t), i }));
     const open = list.filter(t => t.status === 'open').sort((a, b) => b.heat - a.heat);
     const done = list.filter(t => t.status !== 'open');
-    const card = t => `<article class="ouro-fate ${t.status !== 'open' ? 'is-done' : ''}"><header><b>${esc(t.kind === 'inner' ? `${t.sides[0] ?? ''} (ในใจ)` : t.sides.join(' ↔ '))}</b>
+    const card = t => `<article class="ouro-fate ${t.status !== 'open' ? 'is-done' : ''}"><header><b>${t.kind === 'inner' ? `${esc(t.sides[0] ?? '')} (ในใจ)` : t.sides.map(esc).join(` ${icon('fa-arrows-left-right', 'ouro-vs')} `)}</b>
 <span class="ouro-badge">${esc(TENSION_KINDS[t.kind] ?? '')}</span><span class="ouro-badge">${esc(FROM_LABEL[t.from] ?? '')}</span>${t.status !== 'open' ? '<span class="ouro-badge">คลี่คลายแล้ว</span>' : heatDots(t.heat)}</header>
 ${t.peek >= 1 ? `<dl class="ouro-full">${t.wants.length ? `<dt>ต้องการ</dt><dd>${t.wants.map(esc).join(' · ')}</dd>` : ''}<dt>ปะทะเพราะ</dt><dd>${esc(t.why)}</dd>${t.stakes ? `<dt>เดิมพัน</dt><dd>${esc(t.stakes)}</dd>` : ''}${t.next ? `<dt>ก้าวถัดไป</dt><dd>${esc(t.next)}</dd>` : ''}</dl>`
         : `<div class="ouro-peek-row">${confirmBtn('peek-tension', `${icon('fa-eye')} รายละเอียด`, 'ouro-small', `data-id="${t.i}" title="ความต้องการ เดิมพัน และก้าวถัดไป"`)}</div>`}</article>`;

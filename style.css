@@ -400,3 +400,4 @@ body.reduced-motion #ouro_launcher i { animation: none !important; }
 .ouro-heat i.is-on { background: var(--ouro-accent); }
 .ouro-fate.is-done { opacity: 0.7; }
 .ouro-tension-add { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid var(--ouro-line); }
+.ouro-vs { font-size: 0.75em; color: var(--ouro-muted); }
