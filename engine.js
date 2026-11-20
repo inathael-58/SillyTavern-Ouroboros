@@ -11,7 +11,7 @@ import {
     cleanMessage, parseJsonLoose, SEED_KINDS, secretsByTiming, backfillPlan, backfillUntil, backfillRef,
     applyScoutSecrets, activeSecrets, intensityOf, tonesFor, sameToneBirth, TONES,
     shapeOf, CANON, normProtected, PROTECT_RULES, onStageNames, breaksProtection,
-    seedsForArchitect, seedsForScout, pastLines, markShown,
+    seedsForArchitect, seedsForScout, pastLines, markShown, acceptSeedItems,
 } from './lib.js';
 
 const LOG = '[Ouroboros]';
@@ -89,8 +89,18 @@ export function weaveNow(reason = 'manual') {
 const clip = (t, n) => (t.length > n ? t.slice(0, n) + '…' : t);
 
 function storyLanguageHint() {
-    return 'Write every text field in the same language the story is written in.';
+    const lang = host?.settings?.().language;
+    if (lang === 'th') return 'Write every text field in Thai.';
+    if (lang === 'en') return 'Write every text field in English.';
+    return 'Write every text field in the language of the most recent story messages (not the opening greeting or the card, which may be in another language).';
 }
+
+/** What a loose thread is, for the live Scout and the backfill alike. */
+const THREAD_RULES = `WHAT COUNTS AS A LOOSE THREAD: something introduced on the page that leaves a question the story has not answered yet and could answer or pay off later: an unopened letter, an unexplained scar, a promise not kept yet, a stranger who was named but not explained, a rumour, a locked door, a debt, a lie someone told.
+NOT A THREAD: an action that finishes inside the scene (training, a fight that ended, a meal, a walk), an object that is only used or described, scenery, a passing mood, words or deeds that need nothing more.
+Test: would a reader later ask "and what about ___?" If not, it is not a thread.
+Most replies introduce no new thread. Returning none is normal and correct; never pad the list.
+Each thread needs "question": the open question it leaves, in a few words. If you cannot name one, it is not a thread.`;
 
 function characterBlock() {
     const c = ctx();
@@ -121,7 +131,7 @@ function memoryHubBlock(maxChars = 3000) {
     return out;
 }
 
-const SCOUT_SYSTEM = `You are a continuity scout for an ongoing interactive story. You read the latest replies and note concrete loose threads: things the story introduced that are not resolved yet and could matter later (an object, a person, a secret, a promise, an open question, a place, an inner wound). You never invent anything; you only list what is on the page. You answer with JSON only.`;
+const SCOUT_SYSTEM = `You are a continuity scout for an ongoing interactive story. You read the latest replies and note real loose threads: things the story introduced that leave an open question it could pay off later. You are strict: scene props and finished actions are not threads, and most replies have none. You never invent anything; you only list what is on the page. You answer with JSON only.`;
 
 async function runScout() {
     const st = host.state();
@@ -159,7 +169,8 @@ async function runScout() {
         S ? `HIDDEN TRUTHS OF THIS STORY (numbered; the reader must not learn them before their time):\n${live.map((v, i) => `${i + 1}. ${v.text}${v.unknownTo.length ? ` [hidden from: ${v.unknownTo.join(', ')}]` : ''}`).join('\n')}` : '',
         `LATEST STORY TEXT:\n${transcript}`,
         `TASK:
-1. List up to 3 NEW loose threads introduced in messages ${targets.map(i => '#' + i).join(', ')}. Skip atmosphere, trivia, and anything already noted above. Each "text" is one short concrete sentence (at most ~20 words), no interpretation. "msg" is the message number it appeared in.
+${THREAD_RULES}
+1. List at most 2 NEW loose threads introduced in messages ${targets.map(i => '#' + i).join(', ')}, skipping anything already noted above. Each "text" is one short concrete sentence (at most ~20 words), no interpretation. "msg" is the message number it appeared in.
 2. List the ids of noted threads that these messages clearly resolved or paid off.
 ${S ? `3. For message #${last} only, about the hidden truths:
    "clues": a small detail it showed on the page that points at truth n and could also mean something else, as {"n":1,"text":"…"} (most replies carry none);
@@ -167,7 +178,7 @@ ${S ? `3. For message #${last} only, about the hidden truths:
    "revealed": numbers of truths the message states outright or makes unmistakable to the reader. Hints and foreshadowing do NOT count.
 ` : ''}${storyLanguageHint()}
 Answer with JSON only:
-{"new":[{"text":"…","kind":"${kinds}","msg":${last}}],"paid":["s1"]${S ? ',"clues":[],"learned":[],"revealed":[]' : ''}}
+{"new":[{"text":"…","question":"…","kind":"${kinds}","msg":${last}}],"paid":["s1"]${S ? ',"clues":[],"learned":[],"revealed":[]' : ''}}
 If nothing qualifies: {"new":[],"paid":[]${S ? ',"clues":[],"learned":[],"revealed":[]' : ''}}`,
     ].filter(Boolean).join('\n\n');
 
@@ -184,7 +195,7 @@ If nothing qualifies: {"new":[],"paid":[]${S ? ',"clues":[],"learned":[],"reveal
     if (host.chatId() !== chatId) return;
     const st2 = host.state();
     if (st2 !== st) return;
-    for (const it of value.new.slice(0, 3)) {
+    for (const it of acceptSeedItems(value.new, 2)) {
         const msgId = targets.includes(Number(it?.msg)) ? Number(it.msg) : last;
         addSeeds(st, [it], { msgId, swipeId: chat[msgId]?.swipe_id ?? 0 }, prog.phase);
     }
@@ -230,11 +241,12 @@ async function runBackfill() {
                 open.length ? `OPEN THREADS ALREADY NOTED (id: text):\n${open.map(x => `${x.id}: ${x.text}`).join('\n')}` : 'OPEN THREADS ALREADY NOTED: none',
                 `PART ${i + 1} OF ${est.parts.length}, read in story order.\n${body}`,
                 `TASK:
-1. List up to 5 loose threads introduced in this part that are still unresolved by its end and could matter later (an unopened letter, an unexplained scar, a promise not yet kept, a stranger's name). Skip atmosphere, trivia, anything this part already resolves, and anything already noted above. Each "text" is one short concrete sentence (at most ~20 words). "msg" is the message number where it appears (for a summary, the last number of its range), or null if unknown.
+${THREAD_RULES}
+1. List at most 4 loose threads introduced in this part that are still unresolved by its end. Skip anything this part already resolves and anything already noted above. Each "text" is one short concrete sentence (at most ~20 words). "msg" is the message number where it appears (for a summary, the last number of its range), or null if unknown.
 2. List the ids of noted threads that this part clearly resolves.
 ${storyLanguageHint()}
 Answer with JSON only:
-{"new":[{"text":"…","kind":"${kinds}","msg":null}],"paid":[]}`,
+{"new":[{"text":"…","question":"…","kind":"${kinds}","msg":null}],"paid":[]}`,
             ].join('\n\n');
             const { value } = await ask({
                 role: 'scout', source: s.scoutSource, backup: s.scoutBackup, system: SCOUT_SYSTEM, user,
@@ -246,7 +258,7 @@ Answer with JSON only:
                 },
             });
             if (host.chatId() !== chatId || host.state() !== st) return;
-            for (const it of value.new.slice(0, 5)) {
+            for (const it of acceptSeedItems(value.new, 4)) {
                 if (added >= BACKFILL_CAP) break;
                 const ref = backfillRef(part, it?.msg, chat) ?? { msgId: null, swipeId: 0 };
                 const got = addSeeds(st, [it], { ...ref, backfill: true }, 'setup');

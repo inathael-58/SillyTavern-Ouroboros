@@ -13,7 +13,7 @@ import { normalizeState, buildInjection, trimToChat, DEFAULT_TEMPLATE, progressO
 
 const MODULE = 'ouroboros';
 const LOG = '[Ouroboros]';
-const VERSION = '0.6.2'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.6.3'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'lib.js', 'engine.js', 'panel.js', 'ai.js', 'diag.js', 'launcher.js', 'theme-palette.js', 'style.css', 'manifest.json'];
 
@@ -36,7 +36,8 @@ const DEFAULTS = {
     scoutBackup: '',        // '' = none; used when the main API refuses or fails
     architectBackup: '',
     noRush: false,
-    readLore: true,         // send the lorebook entries active in recent turns to the Architect          // ignore the Architect's "faster" (for models that rush to wrap up)
+    readLore: true,
+    language: 'auto',       // auto | th | en: language of seeds, fates and notes the models write         // send the lorebook entries active in recent turns to the Architect          // ignore the Architect's "faster" (for models that rush to wrap up)
     launcher: true,
     launcherPos: LAUNCH_POS_DEFAULT,
 };
@@ -277,6 +278,11 @@ function mountSettings() {
       <small class="ouro-set-hint">ผู้ทอชะตาชะลอจังหวะได้อย่างเดียว เร่งไม่ได้ เหมาะกับโมเดลที่ชอบรีบคลี่คลาย</small>
       <label class="checkbox_label"><input type="checkbox" id="ouro_lore" ${s.readLore ? 'checked' : ''}><span>อ่าน lorebook ที่ทำงานอยู่</span></label>
       <small class="ouro-set-hint">ส่งรายการ lorebook ที่ถูกดึงเข้าฉากล่าสุดให้ผู้ทอชะตาด้วย (ไม่เกินราว 1,300 token) ช่วยบอทตัวละครเยอะและแฟนด้อม</small>
+      <div class="ouro-set-row"><span>ภาษาของปมและชะตา</span><select id="ouro_lang" class="text_pole">
+        <option value="auto" ${s.language === 'auto' ? 'selected' : ''}>อัตโนมัติ</option>
+        <option value="th" ${s.language === 'th' ? 'selected' : ''}>ไทย</option>
+        <option value="en" ${s.language === 'en' ? 'selected' : ''}>English</option></select></div>
+      <small class="ouro-set-hint">อัตโนมัติ = ภาษาของข้อความล่าสุด (ไม่ใช่ข้อความแรกหรือการ์ด ซึ่งอาจเป็นอีกภาษา)</small>
       <div class="ouro-set-row"><span>ทอชะตาทุก</span><input id="ouro_every" type="number" min="0" max="60" class="text_pole" value="${Number(s.every) || 0}"></div>
       <small class="ouro-set-hint">จำนวนข้อความของบอท · 0 = ตามขนาดแผน (สั้น 6 · กลาง 8 · ยาว 10 · มหากาพย์ 12)</small>
       <div class="ouro-set-row"><span>ความลับรั่ว</span><select id="ouro_leak" class="text_pole">
@@ -339,6 +345,7 @@ function mountSettings() {
     $('#ouro_scout_bak').on('change', function () { settings().scoutBackup = this.value; saveSettings(); });
     $('#ouro_arch_bak').on('change', function () { settings().architectBackup = this.value; saveSettings(); });
     $('#ouro_norush').on('change', function () { settings().noRush = this.checked; saveSettings(); });
+    $('#ouro_lang').on('change', function () { settings().language = this.value; saveSettings(); });
     $('#ouro_lore').on('change', function () { settings().readLore = this.checked; saveSettings(); });
     num('#ouro_every', 'every', 0, 60);
     num('#ouro_depth', 'depth', 0, 50);

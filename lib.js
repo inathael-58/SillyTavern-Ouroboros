@@ -427,6 +427,16 @@ export function trimToChat(st, chat) {
 
 const normText = t => String(t ?? '').toLowerCase().replace(/[\s"'“”‘’.,!?…:;()\-–—]+/g, '');
 
+/**
+ * Scout answers worth keeping: a thread must name the open question it leaves. Props and actions that
+ * finish inside the scene cannot, so they drop out here whatever the model claims.
+ */
+export function acceptSeedItems(items, max) {
+    return (Array.isArray(items) ? items : [])
+        .filter(it => String(it?.text ?? '').trim() && String(it?.question ?? '').trim().length >= 4)
+        .slice(0, max);
+}
+
 /** Add seeds found by the Scout. Skips near-duplicates. Returns the added seeds. */
 export function addSeeds(st, items, ref, phase) {
     const known = new Set(st.seeds.filter(s => s.status !== 'dropped').map(s => normText(s.text)));
@@ -440,6 +450,7 @@ export function addSeeds(st, items, ref, phase) {
             id: 's' + st.nextSeed++,
             text,
             kind: normKind(it.kind),
+            question: str(it.question, 200),
             msgId: ref?.msgId ?? null,
             swipeId: ref?.swipeId ?? 0,
             phase: phase ?? 'setup',

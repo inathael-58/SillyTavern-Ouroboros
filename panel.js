@@ -352,7 +352,7 @@ function renderSeeds(st) {
         const where = Number.isInteger(s.msgId) ? `#${s.msgId}` : s.carried ? 'ตอนก่อน' : s.backfill ? 'จากสรุป' : 'เพิ่มเอง';
         return `<li class="ouro-seed ${s.status === 'paid' ? 'is-paid' : ''}">
 <span class="ouro-seed-ic" title="${esc(k.label)}">${icon(k.icon)}</span>
-<div class="ouro-seed-main"><span>${esc(s.text)}</span><small>${esc(k.label)} · ${where} · ${esc(phaseInfo(s.phase).label)}${s.user ? ' · ' + icon('fa-star') + ' เพิ่มเอง' : ''}${s.pinned ? ' · ' + icon('fa-thumbtack') + ' ปักหมุด' : ''}</small></div>
+<div class="ouro-seed-main"><span>${esc(s.text)}</span>${s.question ? `<small class="ouro-seed-q">${icon('fa-circle-question')} ${esc(s.question)}</small>` : ''}<small>${esc(k.label)} · ${where} · ${esc(phaseInfo(s.phase).label)}${s.user ? ' · ' + icon('fa-star') + ' เพิ่มเอง' : ''}${s.pinned ? ' · ' + icon('fa-thumbtack') + ' ปักหมุด' : ''}</small></div>
 ${s.faded ? `<button class="ouro-btn ouro-small" data-act="seed-unfade" data-id="${s.id}">คืน</button>` : s.status === 'open' && !s.user ? `<button class="ouro-icon-btn ${s.pinned ? 'is-on' : ''}" data-act="seed-pin" data-id="${s.id}" title="${s.pinned ? 'เลิกปักหมุด' : 'ปักหมุด: ส่งให้ผู้ทอชะตาทุกครั้ง'}" aria-label="${s.pinned ? 'เลิกปักหมุด' : 'ปักหมุด'}" aria-pressed="${!!s.pinned}">${icon('fa-thumbtack')}</button>` : ''}
 <button class="ouro-icon-btn" data-act="seed-edit" data-id="${s.id}" title="แก้ไข" aria-label="แก้ไข">${icon('fa-pen')}</button>
 ${confirmBtn('seed-drop', icon('fa-trash'), 'ouro-icon-btn', `data-id="${s.id}" title="ลบ" aria-label="ลบ"`)}
