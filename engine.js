@@ -12,6 +12,7 @@ import {
     applyScoutSecrets, activeSecrets, intensityOf, tonesFor, sameToneBirth, TONES,
     shapeOf, CANON, normProtected, PROTECT_RULES, onStageNames, breaksProtection,
     seedsForArchitect, seedsForScout, pastLines, markShown, acceptSeedItems,
+    openTensions, applyScoutTensions, STALL_AFTER, TENSION_KINDS,
 } from './lib.js';
 
 const LOG = '[Ouroboros]';
@@ -164,9 +165,11 @@ async function runScout() {
     const live = [...timing.hold, ...timing.free];
     const heldIds = new Set(timing.hold.map(v => v.id));
     const S = live.length;
+    const tens = openTensions(st, chat);
     const user = [
         open.length ? `OPEN THREADS ALREADY NOTED (id: text):\n${open.map(x => `${x.id}: ${x.text}`).join('\n')}` : 'OPEN THREADS ALREADY NOTED: none',
         S ? `HIDDEN TRUTHS OF THIS STORY (numbered; the reader must not learn them before their time):\n${live.map((v, i) => `${i + 1}. ${v.text}${v.unknownTo.length ? ` [hidden from: ${v.unknownTo.join(', ')}]` : ''}`).join('\n')}` : '',
+        tens.length ? `TENSIONS IN THE STORY (numbered):\n${tens.map((t, i) => `${i + 1}. ${t.kind === 'inner' ? `${t.sides[0]} torn` : t.sides.join(' vs ')}: ${t.why}`).join('\n')}` : '',
         `LATEST STORY TEXT:\n${transcript}`,
         `TASK:
 ${THREAD_RULES}
@@ -176,9 +179,10 @@ ${S ? `3. For message #${last} only, about the hidden truths:
    "clues": a small detail it showed on the page that points at truth n and could also mean something else, as {"n":1,"text":"…"} (most replies carry none);
    "learned": a character from truth n's hidden-from list who found it out in that message, as {"n":1,"who":"Name"};
    "revealed": numbers of truths the message states outright or makes unmistakable to the reader. Hints and foreshadowing do NOT count.
+` : ''}${tens.length ? `4. "tension": for message #${last} only, tensions it clearly made hotter (more at stake, closer to breaking) or cooler (eased, talked through), as [{"n":1,"change":"hotter"|"cooler"}]; most replies move none.
 ` : ''}${storyLanguageHint()}
 Answer with JSON only:
-{"new":[{"text":"…","question":"…","kind":"${kinds}","msg":${last}}],"paid":["s1"]${S ? ',"clues":[],"learned":[],"revealed":[]' : ''}}
+{"new":[{"text":"…","question":"…","kind":"${kinds}","msg":${last}}],"paid":["s1"]${tens.length ? ',"tension":[]' : ''}${S ? ',"clues":[],"learned":[],"revealed":[]' : ''}}
 If nothing qualifies: {"new":[],"paid":[]${S ? ',"clues":[],"learned":[],"revealed":[]' : ''}}`,
     ].filter(Boolean).join('\n\n');
 
@@ -195,10 +199,14 @@ If nothing qualifies: {"new":[],"paid":[]${S ? ',"clues":[],"learned":[],"reveal
     if (host.chatId() !== chatId) return;
     const st2 = host.state();
     if (st2 !== st) return;
+    let newSeeds = 0;
     for (const it of acceptSeedItems(value.new, 2)) {
         const msgId = targets.includes(Number(it?.msg)) ? Number(it.msg) : last;
-        addSeeds(st, [it], { msgId, swipeId: chat[msgId]?.swipe_id ?? 0 }, prog.phase);
+        newSeeds += addSeeds(st, [it], { msgId, swipeId: chat[msgId]?.swipe_id ?? 0 }, prog.phase).length;
     }
+    // a quiet stretch (nothing new, no tension moved) eventually asks the Architect to push
+    const moved = applyScoutTensions(st, chat, value, tens, { msgId: last, swipeId: chat[last]?.swipe_id ?? 0 });
+    st.quiet = newSeeds || moved ? 0 : (Number(st.quiet) || 0) + targets.length;
     paySeeds(st, chat, value.paid, { msgId: last, swipeId: chat[last]?.swipe_id ?? 0 });
     for (const i of targets) st.scanned.push(`${i}:${chat[i]?.swipe_id ?? 0}`);
     if (st.scanned.length > 300) st.scanned = st.scanned.slice(-300);
@@ -304,6 +312,10 @@ export function architectDue(st, chat, s) {
     if (countBotSince(chat, st.lastArchitectAt) >= 1) for (const l of layers(st)) if (lockedFate(st, l) && !act.some(v => v.layer === l)) return 'secrets';
     if (size.arcs && prog.arc >= 1 && !(size.arcs !== Infinity && st.arc.index >= size.arcs) && !(size.arcs === Infinity && st.finale)) return 'arc';
     if (st.lastPhase && st.lastPhase !== `${prog.mainPhase}/${prog.phase}`) return 'phase';
+    if (st.lastArchitectAt >= 0 && countBotSince(chat, st.lastArchitectAt) >= 1) {
+        if (!openTensions(st, chat).length) return 'tensions';
+        if ((Number(st.quiet) || 0) >= STALL_AFTER) return 'stall';
+    }
     const every = Number(s.every) > 0 ? Number(s.every) : size.every;
     if (countBotSince(chat, st.lastArchitectAt) >= every) return 'cadence';
     return null;
@@ -410,6 +422,9 @@ async function runArchitect(reason) {
     tasks.push('"focus": up to 3 open seed ids the writer should touch soon. Near the climax include at least one seed from the setup phase, so the ending echoes the beginning.');
     if (st.shape === 'sandbox') tasks.push('"hooks": two or three openings the world could offer next (a rumour, a stranger, a strange sight), each one sentence; the player may take or ignore them. Also give "beat" as one sentence, no spoilers.');
     else tasks.push(`"beat": the next scene's direction for the ${prog.phase} phase, one sentence, no spoilers.`);
+    const tensNow = openTensions(st, chat);
+    tasks.push(`"tensions": the story's conflicts, as two wants that cannot both come true (not quests or obstacles). Keep 2–4 open. ${tensNow.length ? 'Update the listed ones by "id" (heat 1–5, a new "next" step, "status":"resolved" once it is settled on the page) and add new ones only when needed.' : 'Create them now.'} First use conflicts the card, setting or lore already set up ("from":"card"); invent only what is missing ("from":"invented"), with at least one between characters and one inner. Each: {"id" (omit for new),"sides" ([one name] for inner, [two names] otherwise; the player's character may be a side),"kind" ("between"|"inner"|"society"|"clock"),"wants" (what each side wants, or the two pulls of an inner conflict),"why" (why both cannot happen),"stakes","heat","next" (the next concrete thing that would raise it: a choice, a deadline, someone acting),"from"}. Scale stakes to the intensity; everyday life works with personal stakes. Never decide what the player's character feels or chooses. Respect the protected characters.`);
+    if (reason === 'stall') tasks.push(`The story has gone ${st.quiet} replies without anything new or any tension moving. Give the most fitting tension a concrete push now: set its "next" to something that happens soon, raise its heat by 1, and make "beat" that push.`);
     if (shape.threads) tasks.push(`"threads": a storyline for each important character (up to 5, characters on stage first${st.shape === 'harem' ? ', every love interest gets one' : ''}), as [{"name","want" (what they want),"secret" (what they hide; keep it once set),"next" (one small thing that could happen to them next),"status" ("open" or "resolved")}]. Respect the protected characters.`);
     tasks.push('"pace": "slower" if the story is not ready for its next phase yet, "faster" if it is ahead, else "keep".');
     if (lays.some(l => lockedFate(st, l))) {
@@ -424,6 +439,7 @@ async function runArchitect(reason) {
         `CHARACTERS\n${characterBlock()}`,
         lore.length ? `LORE IN PLAY (lorebook entries active in recent turns)\n${clip(lore.map(l => `- ${l.title}: ${cleanMessage(l.content)}`).join('\n'), 4000)}` : '',
         stage.length ? `ON STAGE RECENTLY: ${stage.join(', ')}` : '',
+        tensNow.length ? `TENSIONS\n${tensNow.map(t => `${t.id} [${TENSION_KINDS[t.kind] ? t.kind : 'between'}, heat ${t.heat}/5, from ${t.from}] ${t.sides.join(' vs ')} | wants: ${t.wants.join(' / ')} | why: ${t.why} | stakes: ${t.stakes} | next: ${t.next}`).join('\n')}` : '',
         shape.threads && st.threads?.length ? `CHARACTER THREADS\n${st.threads.map(t => `${t.name} [${t.status}] wants: ${t.want} | hides: ${t.secret} | next: ${t.next}`).join('\n')}` : '',
         past ? `PAST\n${past}` : '',
         mh ? `EARLIER IN THIS CHAT (summaries)\n${mh}` : '',
@@ -450,6 +466,7 @@ async function runArchitect(reason) {
                 const born = (Array.isArray(j.fates) ? j.fates : []).filter(f => f?.truth && (f.layer ?? lays[0]) === l && !st.fates.some(x => x.id === String(f.id ?? '') && x.status !== 'pruned'));
                 if (sameToneBirth(born, askedTones[l])) throw new Error(`ชะตาออกมาโทนเดียวกันหมด (${TONES[String(born[0].tone).toLowerCase()] ?? born[0].tone})`);
             }
+            if (reason === 'tensions' && !(Array.isArray(j.tensions) && j.tensions.length)) throw new Error('ผู้ทอชะตาไม่ได้เขียนเส้นตึง');
             if (reason === 'secrets' && !(Array.isArray(j.secrets) && j.secrets.some(x => x?.text || typeof x === 'string'))) throw new Error('ผู้ทอชะตาไม่ได้เขียนความลับของชะตาที่ล็อก');
             return j;
         },
@@ -458,6 +475,7 @@ async function runArchitect(reason) {
     if (host.chatId() !== chatId || host.state() !== st) return;
     const res = applyArchitect(st, value, { at, prog, noRush: !!s.noRush });
     markShown(st, seeds);
+    st.quiet = 0;
     if (usedBackup) host.diag(`architect used the backup API (${reason})`);
     if (res.blocked?.length) host.diag(`blocked ${res.blocked.length} fate(s) that broke a protection`);
     const after = progressOf(st, chat);

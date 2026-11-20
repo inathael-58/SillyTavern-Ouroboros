@@ -263,6 +263,8 @@ export function newState(o = {}, rand = Math.random) {
         canon: CANON[o.canon] ? o.canon : 'canon',
         protected: normProtected(o.protected),
         threads: [],
+        tensions: [],
+        quiet: 0,
         hooks: [],
         startedAt: Math.max(0, Number(o.startedAt) || 0),
         cycle: 1,
@@ -608,6 +610,7 @@ export function applyArchitect(st, out, { at, prog, noRush = false }) {
     }
     if (Array.isArray(out.hooks)) st.hooks = strList(out.hooks, 3).map(h => h.slice(0, 200));
     if (Array.isArray(out.threads) && shapeOf(st.shape).threads) mergeThreads(st, out.threads);
+    if (Array.isArray(out.tensions)) mergeTensions(st, out.tensions);
     if (Array.isArray(out.focus)) st.focus = strList(out.focus, 3).filter(id => st.seeds.some(s => s.id === id));
     if (Array.isArray(out.secrets)) mergeSecrets(st, out.secrets);
     if (out.pace === 'slower') st.shift = clamp((st.shift || 0) + 0.05, -0.1, 0.1);
@@ -887,7 +890,7 @@ function secretLines(v, { ideas = false, when = false } = {}) {
 }
 
 /** The text injected into the chat for the story writer. Empty string = nothing to send. */
-export function buildInjection(st, chat, template = DEFAULT_TEMPLATE) {
+export function buildInjection(st, chat, template = DEFAULT_TEMPLATE, { player = '' } = {}) {
     if (!st || st.ended) return '';
     const prog = progressOf(st, chat);
     const size = sizeOf(st.size);
@@ -916,7 +919,8 @@ export function buildInjection(st, chat, template = DEFAULT_TEMPLATE) {
         const on = st.threads.filter(t => t.status !== 'resolved' && stage.some(n => sameNameLoose(n, t.name))).slice(0, 2);
         if (on.length) threadText = `Character threads in this scene (each character has their own story; hint at a secret at most):\n${on.map(t => `- ${t.name}${t.want ? `: wants ${t.want}` : ''}${t.secret ? `; hides: ${t.secret}` : ''}${t.next ? `; next for them: ${t.next}` : ''}`).join('\n')}`;
     }
-    const seedsAll = [seeds, threadText].filter(Boolean).join('\n');
+    const tensionText = tensionLines(st, chat, prog, player);
+    const seedsAll = [seeds, threadText, tensionText].filter(Boolean).join('\n');
     const fill = { phase, beat, seeds: seedsAll, secrets };
     const tpl = String(template || DEFAULT_TEMPLATE);
     let text = tpl.replace(/\{\{(phase|beat|seeds|secrets)\}\}/g, (_, k) => fill[k]);
@@ -982,6 +986,8 @@ export function stats(st, chat) {
         unrealized: st.fates.filter(f => f.status === 'pruned').length,
         peeked: st.fates.some(f => f.peek > 0) || (st.secretTropes?.peek ?? 0) > 0,
         secrets: activeSecrets(st, chat).length,
+        tensions: openTensions(st, chat).length,
+        maxHeat: Math.max(0, ...openTensions(st, chat).map(t => t.heat)),
         revealed: activeSecrets(st, chat).filter(v => v.revealed).length,
     };
 }
@@ -1173,4 +1179,117 @@ export function pastLines(st, { fullActs = 3, fullCycles = 2 } = {}) {
     if (oldActs.length) lines.push(`Acts ${oldActs[0].index}–${oldActs[oldActs.length - 1].index} (finished, in short): ${oldActs.map(a => str(a.summary, 80)).join(' | ')}`);
     for (const a of acts.slice(-fullActs)) lines.push(`Act ${a.index} (finished): ${a.summary}`);
     return lines;
+}
+
+// ---------------------------------------------------------------- tensions (v0.7): two wants that cannot both come true
+
+export const TENSION_KINDS = Object.freeze({
+    between: 'ระหว่างคน',
+    inner: 'ในใจ',
+    society: 'กับสังคม',
+    clock: 'เวลา/ทางเลือก',
+});
+/** Quiet bot replies in a row (no new seed, no tension moved) before the Architect is asked to push. */
+export const STALL_AFTER = 4;
+export const MAX_OPEN_TENSIONS = 4;
+
+/**
+ * A tension: { id: 'T1', sides: [name, name?], kind, wants: [a, b], why, stakes, heat: 1–5, next,
+ *              status: 'open'|'resolved', from: 'card'|'invented'|'user', peek,
+ *              shifts: [{delta, msgId, swipeId}] }
+ * heat is the Architect's last value; shifts are the Scout's +1/−1 since then, tied to replies like seeds.
+ */
+export function normTension(x) {
+    return {
+        id: String(x?.id ?? ''),
+        sides: strList(x?.sides, 2),
+        kind: TENSION_KINDS[x?.kind] ? x.kind : 'between',
+        wants: strList(x?.wants, 2),
+        why: str(x?.why, 300),
+        stakes: str(x?.stakes, 200),
+        heat: clamp(Math.round(Number(x?.heat) || 2), 1, 5),
+        next: str(x?.next, 300),
+        status: x?.status === 'resolved' ? 'resolved' : 'open',
+        from: ['card', 'invented', 'user'].includes(x?.from) ? x.from : 'invented',
+        peek: Number(x?.peek) || 0,
+        shifts: Array.isArray(x?.shifts) ? x.shifts : [],
+    };
+}
+
+/** A tension as it stands on screen: heat with the Scout's on-screen shifts. */
+export function tensionView(chat, t) {
+    const n = normTension(t);
+    const shift = n.shifts.filter(x => onScreen(chat, x)).reduce((a, x) => a + (Number(x.delta) || 0), 0);
+    return { ...n, heat: clamp(n.heat + shift, 1, 5) };
+}
+export const openTensions = (st, chat) => (st.tensions ?? []).map(t => tensionView(chat, t)).filter(t => t.status === 'open');
+
+/** Merge the Architect's tensions: known ids are updated (its heat replaces the Scout's shifts), new ones take the next id. */
+export function mergeTensions(st, list) {
+    const cur = (Array.isArray(st.tensions) ? st.tensions : []).map(normTension);
+    for (const raw of Array.isArray(list) ? list : []) {
+        if (!raw || typeof raw !== 'object') continue;
+        const t = raw.id && cur.find(x => x.id === String(raw.id));
+        if (t) {
+            for (const k of ['why', 'stakes', 'next']) if (raw[k] !== undefined) t[k] = str(raw[k], k === 'stakes' ? 200 : 300);
+            if (raw.sides) t.sides = strList(raw.sides, 2);
+            if (raw.wants) t.wants = strList(raw.wants, 2);
+            if (TENSION_KINDS[raw.kind]) t.kind = raw.kind;
+            if (Number.isFinite(Number(raw.heat))) { t.heat = clamp(Math.round(Number(raw.heat)), 1, 5); t.shifts = []; }
+            if (raw.status === 'resolved') t.status = 'resolved';
+            continue;
+        }
+        if (!strList(raw.sides, 2).length || !str(raw.why, 300)) continue;
+        if (cur.some(x => normText(x.why) === normText(raw.why))) continue; // the same tension sent again without its id
+        if (cur.filter(x => x.status === 'open').length >= MAX_OPEN_TENSIONS) continue;
+        const n = Math.max(0, ...cur.map(x => Number(String(x.id).replace(/^T/, '')) || 0)) + 1;
+        cur.push(normTension({ ...raw, id: 'T' + n, shifts: [] }));
+    }
+    st.tensions = cur;
+    return cur;
+}
+
+/** Apply the Scout's "tension" report ([{n, change: 'hotter'|'cooler'}]) for one reply. Returns how many moved. */
+export function applyScoutTensions(st, chat, out, live, ref) {
+    if (!live?.length || !ref || !Number.isInteger(ref.msgId)) return 0;
+    let moved = 0;
+    const seen = new Set();
+    for (const r of Array.isArray(out?.tension) ? out.tension : []) {
+        const v = live[Number(r?.n) - 1];
+        const t = v && (st.tensions ?? []).find(x => x.id === v.id);
+        const delta = r?.change === 'hotter' ? 1 : r?.change === 'cooler' ? -1 : 0;
+        if (!t || !delta || seen.has(t.id)) continue; // one move per tension per reply
+        seen.add(t.id);
+        t.shifts = [...(Array.isArray(t.shifts) ? t.shifts : []), { delta, msgId: ref.msgId, swipeId: ref.swipeId ?? 0 }].slice(-12);
+        moved++;
+    }
+    return moved;
+}
+
+const TENSION_PHASE = {
+    setup: 'Let the tensions surface in small ways; nothing has to break yet.',
+    rising: 'Turn up the heat: each tension costs a little more than last time.',
+    midpoint: 'A tension takes a turn that changes how someone sees it.',
+    crisis: 'Let the tensions tangle: easing one should worsen another.',
+    climax: 'Tensions come to a head; people must choose.',
+    resolution: 'Show what each tension cost and what changed.',
+};
+
+/** Tensions for the writer: the ones whose sides are on stage (or involve the player), hottest first, at most two. */
+export function tensionLines(st, chat, prog, player = '') {
+    const open = openTensions(st, chat);
+    if (!open.length) return '';
+    const stage = onStageNames(chat, open.flatMap(t => t.sides)).map(n => n.toLowerCase());
+    const isPlayer = n => !!player && sameNameLoose(n, player);
+    const on = open
+        .filter(t => t.sides.some(n => isPlayer(n) || stage.some(x => sameNameLoose(x, n))))
+        .sort((a, b) => b.heat - a.heat)
+        .slice(0, 2);
+    if (!on.length) return '';
+    const line = t => {
+        const who = t.kind === 'inner' ? `${t.sides[0]} is torn` : t.sides.join(' vs ');
+        const wants = t.wants.length ? `: ${t.wants.join(' / ')}` : '';
+        return `- ${who}${wants} (${t.why}) · heat ${t.heat}/5${t.next ? ` · next: ${t.next}` : ''}`;
+    };
+    return `Tensions in play (show them in small moments, subtext and costly choices; the world and other characters push, but never decide what the player's character feels or chooses). ${TENSION_PHASE[prog.phase] ?? ''}\n${on.map(line).join('\n')}`;
 }
