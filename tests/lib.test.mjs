@@ -9,7 +9,7 @@ import {
     mergeSecrets, applyScoutSecrets, activeSecrets, secretView,
     tonesFor, sameToneBirth, looksLikeRefusal, intensityOf,
     mainGateOpen, breaksProtection, normProtected, mergeThreads, onStageNames,
-    seedsForArchitect, seedsForScout, pastLines, markShown,
+    seedsForArchitect, seedsForScout, pastLines, markShown, acceptSeedItems,
 } from '../lib.js';
 
 /** A chat of n visible messages, alternating user/bot, starting with a bot greeting. */
@@ -630,4 +630,20 @@ test('stale seeds fade (except the player\'s, pinned or used ones) and stop bein
     assert.ok(!ids.includes('s1') && ids.includes('s3') && ids.includes('s4'));
     assert.ok(!seedsForScout(st, chat).some(x => x.id === 's1'));
     assert.ok(seedsForScout(st, chat).some(x => x.id === 's3'), 'pinned seeds are always in the Scout list');
+});
+
+// ---------------------------------------------------------------- v0.6.3: only real threads
+
+test('a seed must name the open question it leaves; props and finished actions drop out', () => {
+    const kept = acceptSeedItems([
+        { text: 'ดาบไม้โอ๊กที่ทิอาโกใช้ซ้อม', question: '' },
+        { text: 'ทิอาโกไล่กระบวนท่าครบสามรอบ' },
+        { text: 'จักรพรรดินีกระซิบบางอย่างกับนาธาเอล', question: 'กระซิบว่าอะไร' },
+        { text: 'จดหมายที่ยังไม่ได้เปิด', question: 'ในจดหมายเขียนว่าอะไร' },
+        { text: 'แผลเป็นที่ไม่มีใครพูดถึง', question: 'แผลมาจากไหน' },
+    ], 2);
+    assert.deepEqual(kept.map(x => x.text), ['จักรพรรดินีกระซิบบางอย่างกับนาธาเอล', 'จดหมายที่ยังไม่ได้เปิด']);
+    const st = newState();
+    addSeeds(st, kept, { msgId: 1 }, 'setup');
+    assert.equal(st.seeds[0].question, 'กระซิบว่าอะไร');
 });
