@@ -9,6 +9,7 @@ import {
     lockedPastChat, unlockFate, cutThreads, newCycle, addSeeds, SEED_KINDS, normKind, TROPES, TROPE_CATEGORIES, MOODS,
     newState, activeSecrets, INTENSITY, INTENSITY_IDS, TONES,
     SHAPES, SHAPE_IDS, CANON, PROTECT_RULES, normProtected,
+    TENSION_KINDS, mergeTensions, tensionView,
 } from './lib.js';
 
 const ctx = () => SillyTavern.getContext();
@@ -302,6 +303,7 @@ ${banners.join('')}
     <li>ปูไว้ <b>${k.planted}</b> ปม · เฉลยแล้ว <b>${k.paid}</b></li>
     ${fateLine}
     ${st.secretTropes ? `<li>มีโทรปลับ <b>${st.secretTropes.picked.length}</b> อัน</li>` : ''}
+    ${k.tensions ? `<li>เส้นตึง <b>${k.tensions}</b> · ร้อนสุด <b>${k.maxHeat}</b>/5</li>` : ''}
     ${k.secrets ? `<li>ความลับ <b>${k.secrets}</b> ข้อ · เผยแล้ว <b>${k.revealed}</b></li>` : ''}
     ${st.carriedFrom?.length ? `<li><small>${icon('fa-link')} ต่อเรื่องมาจาก ${st.carriedFrom.length} แชทก่อนหน้า</small></li>` : ''}
     ${st.leaks?.length ? `<li><small>${icon('fa-shield-halved')} สงสัยความลับรั่ว ${st.leaks.length} ครั้ง</small></li>` : ''}
@@ -419,6 +421,28 @@ function fullFate(f) {
     return `<dl class="ouro-full">${f.tone ? `<dt>โทน</dt><dd>${esc(TONES[f.tone] ?? f.tone)}</dd>` : ''}<dt>ความจริง</dt><dd>${esc(f.truth)}</dd>${f.twists?.length ? `<dt>หักมุม</dt><dd><ul>${f.twists.map(t => `<li>${esc(t)}</li>`).join('')}</ul></dd>` : ''}${f.ending ? `<dt>ตอนจบ</dt><dd>${esc(f.ending)}</dd>` : ''}</dl>`;
 }
 
+const FROM_LABEL = { card: 'จากการ์ด', invented: 'คิดขึ้น', user: 'เพิ่มเอง' };
+function heatDots(h) {
+    return `<span class="ouro-heat" aria-label="ความร้อน ${h} จาก 5">${[1, 2, 3, 4, 5].map(i => `<i class="${i <= h ? 'is-on' : ''}"></i>`).join('')}</span>`;
+}
+function tensionsHtml(st) {
+    const list = (st.tensions ?? []).map((t, i) => ({ ...tensionView(chat(), t), i }));
+    const open = list.filter(t => t.status === 'open').sort((a, b) => b.heat - a.heat);
+    const done = list.filter(t => t.status !== 'open');
+    const card = t => `<article class="ouro-fate ${t.status !== 'open' ? 'is-done' : ''}"><header><b>${esc(t.kind === 'inner' ? `${t.sides[0] ?? ''} (ในใจ)` : t.sides.join(' ↔ '))}</b>
+<span class="ouro-badge">${esc(TENSION_KINDS[t.kind] ?? '')}</span><span class="ouro-badge">${esc(FROM_LABEL[t.from] ?? '')}</span>${t.status !== 'open' ? '<span class="ouro-badge">คลี่คลายแล้ว</span>' : heatDots(t.heat)}</header>
+${t.peek >= 1 ? `<dl class="ouro-full">${t.wants.length ? `<dt>ต้องการ</dt><dd>${t.wants.map(esc).join(' · ')}</dd>` : ''}<dt>ปะทะเพราะ</dt><dd>${esc(t.why)}</dd>${t.stakes ? `<dt>เดิมพัน</dt><dd>${esc(t.stakes)}</dd>` : ''}${t.next ? `<dt>ก้าวถัดไป</dt><dd>${esc(t.next)}</dd>` : ''}</dl>`
+        : `<div class="ouro-peek-row">${confirmBtn('peek-tension', `${icon('fa-eye')} รายละเอียด`, 'ouro-small', `data-id="${t.i}" title="ความต้องการ เดิมพัน และก้าวถัดไป"`)}</div>`}</article>`;
+    return `<section class="ouro-card"><h4>เส้นตึง <small>${open.length}</small></h4>
+<p class="ouro-hint">ความต้องการสองอย่างที่เป็นจริงพร้อมกันไม่ได้ ใครปะทะใครและความร้อนเห็นได้เลย รายละเอียดกับก้าวถัดไปต้องแอบดู</p>
+${open.length ? open.map(card).join('') : empty('fa-bolt', 'ยังไม่มีเส้นตึง', 'ผู้ทอชะตาจะเขียนในรอบถัดไป หรือเพิ่มเองด้านล่าง')}
+${done.length ? done.map(card).join('') : ''}
+<div class="ouro-tension-add">
+  <div class="ouro-row"><input class="ouro-input" data-field="ten-a" placeholder="ฝ่ายหนึ่ง"><input class="ouro-input" data-field="ten-b" placeholder="อีกฝ่าย (ว่าง = ในใจ)"></div>
+  <div class="ouro-row"><input class="ouro-input" data-field="ten-why" placeholder="ปะทะกันเรื่องอะไร"><button class="ouro-btn" data-act="tension-add">เพิ่ม</button></div>
+</div></section>`;
+}
+
 function threadsHtml(st) {
     if (!SHAPES[st.shape ?? 'story']?.threads) return '';
     const list = st.threads ?? [];
@@ -444,7 +468,7 @@ ${tr.peek >= 2 ? `<p class="ouro-shadow">${tr.picked.map(p => esc(p.trope)).join
 <div class="ouro-peek-row">${[1, 2].map(n => n <= tr.peek ? `<span class="ouro-peek-done">${icon('fa-check')} ${n === 1 ? 'หมวด' : 'โทรป'}</span>` : n === tr.peek + 1 ? confirmBtn('peek-trope', `${icon('fa-eye')} ${n === 1 ? 'หมวด' : 'โทรป'}`, 'ouro-small', `data-level="${n}"`) : '').join('')}</div></section>` : '';
     return `
 <section class="ouro-card ouro-warn-card">${icon('fa-mask')} <span>แอบดูทีละขั้น ต้องแตะสองครั้งทุกครั้ง ดูแล้วย้อนไม่ได้ และหน้าหลักจะขึ้นว่า "แอบดูแล้ว"</span></section>
-${blocks}${threadsHtml(st)}${trope}`;
+${blocks}${tensionsHtml(st)}${threadsHtml(st)}${trope}`;
 }
 
 // ---------------------------------------------------------------- archive
@@ -564,6 +588,17 @@ function handle(act, btn) {
             const list = act === 'd-prot-del' ? ui.draft.protected : st.protected;
             list?.splice(Number(val), 1);
             return act === 'd-prot-del' ? render() : done();
+        }
+        case 'peek-tension': { const t = st.tensions?.[Number(id)]; if (t) t.peek = 1; return done(); }
+        case 'tension-add': {
+            const a = field('ten-a')?.value.trim();
+            const b = field('ten-b')?.value.trim();
+            const why = field('ten-why')?.value.trim();
+            if (!a || !why) { toastr.warning('ใส่อย่างน้อยฝ่ายหนึ่งกับเรื่องที่ปะทะ'); return; }
+            const before = (st.tensions ?? []).length;
+            mergeTensions(st, [{ sides: b ? [a, b] : [a], kind: b ? 'between' : 'inner', why, heat: 2, from: 'user', peek: 1 }]);
+            if ((st.tensions ?? []).length === before) { toastr.warning('เส้นตึงที่ยังไม่คลี่คลายเต็ม 4 เส้นแล้ว'); return; }
+            return done();
         }
         case 'peek-thread': { const t = st.threads?.[Number(id)]; if (t) t.peek = Math.max(t.peek ?? 0, Number(btn.dataset.level)); return done(); }
         case 'd-mood': saveDraftFields(); toggle(ui.draft.moods, val); return render();

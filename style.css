@@ -395,3 +395,8 @@ body.reduced-motion #ouro_launcher i { animation: none !important; }
 .ouro-prot .ouro-chip { font-size: 0.8em; padding: 3px 10px; }
 .ouro-icon-btn.is-on { color: var(--ouro-accent-text); }
 .ouro-seed-main .ouro-seed-q { color: var(--ouro-accent-text); opacity: 0.85; }
+.ouro-heat { display: inline-flex; gap: 3px; margin-left: auto; }
+.ouro-heat i { width: 8px; height: 8px; border-radius: var(--ouro-r-pill); background: var(--ouro-line); }
+.ouro-heat i.is-on { background: var(--ouro-accent); }
+.ouro-fate.is-done { opacity: 0.7; }
+.ouro-tension-add { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid var(--ouro-line); }

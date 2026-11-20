@@ -13,7 +13,7 @@ import { normalizeState, buildInjection, trimToChat, DEFAULT_TEMPLATE, progressO
 
 const MODULE = 'ouroboros';
 const LOG = '[Ouroboros]';
-const VERSION = '0.6.3'; // ให้ตรงกับ manifest.json เสมอ
+const VERSION = '0.7.0'; // ให้ตรงกับ manifest.json เสมอ
 const BASE_URL = new URL('.', import.meta.url);
 const FILES = ['index.js', 'lib.js', 'engine.js', 'panel.js', 'ai.js', 'diag.js', 'launcher.js', 'theme-palette.js', 'style.css', 'manifest.json'];
 
@@ -191,7 +191,7 @@ function applyInjection(forceEmpty = false) {
     const s = settings();
     let text = '';
     if (!forceEmpty && s.enabled && hasChat()) {
-        try { text = buildInjection(state(), ctx().chat ?? [], s.template); } catch (e) { console.warn(LOG, 'injection', e); diag(`ERROR injection: ${e?.message ?? e}`); }
+        try { text = buildInjection(state(), ctx().chat ?? [], s.template, { player: ctx().name1 ?? '' }); } catch (e) { console.warn(LOG, 'injection', e); diag(`ERROR injection: ${e?.message ?? e}`); }
     }
     ctx().setExtensionPrompt(MODULE, text, POS.IN_CHAT, Number(s.depth), false, Number(s.role));
 }

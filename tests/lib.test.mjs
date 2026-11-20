@@ -10,6 +10,7 @@ import {
     tonesFor, sameToneBirth, looksLikeRefusal, intensityOf,
     mainGateOpen, breaksProtection, normProtected, mergeThreads, onStageNames,
     seedsForArchitect, seedsForScout, pastLines, markShown, acceptSeedItems,
+    mergeTensions, openTensions, applyScoutTensions, tensionLines, MAX_OPEN_TENSIONS,
 } from '../lib.js';
 
 /** A chat of n visible messages, alternating user/bot, starting with a bot greeting. */
@@ -646,4 +647,54 @@ test('a seed must name the open question it leaves; props and finished actions d
     const st = newState();
     addSeeds(st, kept, { msgId: 1 }, 'setup');
     assert.equal(st.seeds[0].question, 'กระซิบว่าอะไร');
+});
+
+// ---------------------------------------------------------------- v0.7: tensions
+
+const T1 = { sides: ['Mira', 'Kai'], kind: 'between', wants: ['Mira อยากให้ Kai อยู่ต่อ', 'Kai อยากไปเรียนต่อเมืองหลวง'], why: 'ได้แค่ทางเดียว', stakes: 'มิตรภาพสิบปี', heat: 2, next: 'จดหมายตอบรับมาถึง', from: 'invented' };
+
+test('tensions get ids, refine by id, cap at four open, and need sides and a why', () => {
+    const st = newState();
+    mergeTensions(st, [T1, { sides: ['Lena'], kind: 'inner', why: 'อยากเป็นที่รักแต่กลัวโดนทิ้ง', heat: 3 }, { sides: [], why: 'x' }, { sides: ['A', 'B'] }]);
+    assert.deepEqual(st.tensions.map(t => t.id), ['T1', 'T2']);
+    mergeTensions(st, [{ ...T1 }]);
+    assert.equal(st.tensions.length, 2, 'the same tension without its id is not added twice');
+    mergeTensions(st, [{ id: 'T1', heat: 4, next: 'Kai ตัดสินใจ' }, { id: 'T2', status: 'resolved' }]);
+    assert.equal(st.tensions[0].heat, 4);
+    assert.equal(st.tensions[0].next, 'Kai ตัดสินใจ');
+    assert.equal(openTensions(st, chatOf(2)).length, 1);
+    for (let i = 0; i < 6; i++) mergeTensions(st, [{ sides: [`X${i}`, 'Y'], why: `เหตุ ${i}` }]);
+    assert.equal(openTensions(st, chatOf(2)).length, MAX_OPEN_TENSIONS);
+});
+
+test('the Scout moves heat per reply; swiping the reply away undoes it; the Architect\'s heat resets the shifts', () => {
+    const st = newState();
+    mergeTensions(st, [T1]);
+    const chat = chatOf(10);
+    let live = openTensions(st, chat);
+    assert.equal(applyScoutTensions(st, chat, { tension: [{ n: 1, change: 'hotter' }, { n: 1, change: 'hotter' }] }, live, { msgId: 8, swipeId: 0 }), 1);
+    applyScoutTensions(st, chat, { tension: [{ n: 1, change: 'hotter' }] }, live, { msgId: 9, swipeId: 0 });
+    assert.equal(openTensions(st, chat)[0].heat, 4);
+    chat[9].swipe_id = 1;
+    assert.equal(openTensions(st, chat)[0].heat, 3);
+    mergeTensions(st, [{ id: 'T1', heat: 2 }]);
+    assert.equal(st.tensions[0].shifts.length, 0);
+    assert.equal(openTensions(st, chat)[0].heat, 2);
+});
+
+test('the writer gets the tensions of who is on stage (or the player), hottest first, at most two', () => {
+    const st = newState();
+    mergeTensions(st, [T1, { sides: ['Lena'], kind: 'inner', wants: ['อยากเป็นที่รัก', 'กลัวโดนทิ้ง'], why: 'ปมเก่า', heat: 5 }, { sides: ['Kai', 'พ่อ'], why: 'ร้านของครอบครัว', heat: 1 }]);
+    const chat = chatOf(6); // speakers: Bot / User
+    chat[5].mes = 'Mira ยิ้มให้';
+    const prog = progressOf(st, chat);
+    let t = tensionLines(st, chat, prog, 'Kai');
+    assert.match(t, /Tensions in play/);
+    assert.match(t, /- Mira vs Kai: Mira อยากให้ Kai อยู่ต่อ \/ Kai อยากไปเรียนต่อเมืองหลวง \(ได้แค่ทางเดียว\) · heat 2\/5 · next: จดหมายตอบรับมาถึง/);
+    assert.match(t, /Kai vs พ่อ/, 'the player is always on stage');
+    assert.doesNotMatch(t, /Lena/, 'off stage');
+    chat[5].mes = 'Lena และ Mira';
+    t = tensionLines(st, chat, prog, '');
+    assert.match(t.split('\n')[1], /Lena is torn/, 'hottest first');
+    assert.match(buildInjection(st, chat, undefined, { player: 'Kai' }), /Tensions in play/);
 });
