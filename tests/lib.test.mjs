@@ -9,7 +9,7 @@ import {
     mergeSecrets, applyScoutSecrets, activeSecrets, secretView,
     tonesFor, sameToneBirth, looksLikeRefusal, intensityOf,
     mainGateOpen, breaksProtection, normProtected, mergeThreads, onStageNames,
-    seedsForArchitect, seedsForScout, pastLines,
+    seedsForArchitect, seedsForScout, pastLines, markShown,
 } from '../lib.js';
 
 /** A chat of n visible messages, alternating user/bot, starting with a bot greeting. */
@@ -597,4 +597,37 @@ test('old acts fold into one short line; recent acts stay in full', () => {
     assert.ok(lines[0].length < 600);
     assert.match(lines[3], /^Act 8 \(finished\)/);
     assert.deepEqual(pastLines(newState()), []);
+});
+
+// ---------------------------------------------------------------- v0.6.2: old seeds come round again
+
+test('rotation: every old seed is shown again within a few passes', () => {
+    const st = newState({ size: 'long' });
+    const chat = chatOf(400);
+    for (let i = 0; i < 100; i++) addSeeds(st, [{ text: `ปมเก่าที่ ${i} ไม่ผูกกับอะไร` }], { msgId: i * 3 }, 'rising');
+    const seen = new Set();
+    for (let pass = 0; pass < 8; pass++) {
+        const { seeds } = seedsForArchitect(st, chat);
+        assert.equal(seeds.length, 40);
+        for (const x of seeds) seen.add(x.id);
+        markShown(st, seeds);
+    }
+    assert.equal(seen.size, 100, 'all 100 seeds were shown at least once in 8 passes');
+    assert.equal(st.passes, 8);
+});
+
+test('stale seeds fade (except the player\'s, pinned or used ones) and stop being sent; pinned ones always are', () => {
+    const st = newState({ size: 'medium' });
+    const chat = chatOf(40);
+    addSeeds(st, [{ text: 'ปมที่เรื่องผ่านไปแล้ว' }, { text: 'ปมที่ชะตาใช้อยู่' }, { text: 'ปมที่ปักหมุด' }], { msgId: 2 }, 'rising');
+    addSeeds(st, [{ text: 'ปมที่ผู้เล่นเพิ่ม' }], { user: true }, 'rising');
+    st.seeds[2].pinned = true;
+    st.fates.push({ id: 'A', layer: 'main', status: 'alive', needs: ['s2'] });
+    const r = applyArchitect(st, { stale: ['s1', 's2', 's3', 's4'] }, { at: 40, prog: progressOf(st, chat) });
+    assert.equal(r.faded, 1);
+    assert.deepEqual(st.seeds.map(x => !!x.faded), [true, false, false, false]);
+    const ids = seedsForArchitect(st, chat).seeds.map(x => x.id);
+    assert.ok(!ids.includes('s1') && ids.includes('s3') && ids.includes('s4'));
+    assert.ok(!seedsForScout(st, chat).some(x => x.id === 's1'));
+    assert.ok(seedsForScout(st, chat).some(x => x.id === 's3'), 'pinned seeds are always in the Scout list');
 });

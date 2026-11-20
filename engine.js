@@ -11,7 +11,7 @@ import {
     cleanMessage, parseJsonLoose, SEED_KINDS, secretsByTiming, backfillPlan, backfillUntil, backfillRef,
     applyScoutSecrets, activeSecrets, intensityOf, tonesFor, sameToneBirth, TONES,
     shapeOf, CANON, normProtected, PROTECT_RULES, onStageNames, breaksProtection,
-    seedsForArchitect, seedsForScout, pastLines,
+    seedsForArchitect, seedsForScout, pastLines, markShown,
 } from './lib.js';
 
 const LOG = '[Ouroboros]';
@@ -393,7 +393,8 @@ async function runArchitect(reason) {
         if (room[l] > 0) tasks.push(`Create ${room[l]} new fate(s) for layer "${l}"${what}, one per tone, in this order: ${askedTones[l].map((t, i) => `fate ${i + 1} "${t}"`).join(', ')} ("bright" = ends well, earned; "bittersweet" = a win that costs; "dark" = a real loss or a betrayal that lands). Give each "id" a new letter, "layer":"${l}", "tone", "truth", up to 3 "twists", "ending", "scent" (ONE word naming its theme), "shadow" (one vague, evocative sentence that hints without revealing), "needs" (ids of seeds it would pay off) a "score", and "harm" (every named character this fate makes the villain, kills or turns traitor, as [{"name","role"}] with role "villain", "dies" or "betrays"; [] if none).`);
     }
     if (live.length) tasks.push('For every living or locked fate listed, return {"id","score","contradicted","reason"} and, if useful, refined "twists"/"ending"/"needs". Do not change a locked fate\'s truth.');
-    tasks.push('"seedFates": for each open seed, the fate ids that could use it.');
+    tasks.push('"seedFates": for each open seed, the fate ids that could use it. Old seeds come round again on later passes: tie one to a fate when it fits.');
+    tasks.push('"stale": ids of open seeds the story has clearly moved on from and that no possible fate needs; they stop being sent (most passes: none).');
     tasks.push('"focus": up to 3 open seed ids the writer should touch soon. Near the climax include at least one seed from the setup phase, so the ending echoes the beginning.');
     if (st.shape === 'sandbox') tasks.push('"hooks": two or three openings the world could offer next (a rumour, a stranger, a strange sight), each one sentence; the player may take or ignore them. Also give "beat" as one sentence, no spoilers.');
     else tasks.push(`"beat": the next scene's direction for the ${prog.phase} phase, one sentence, no spoilers.`);
@@ -417,7 +418,7 @@ async function runArchitect(reason) {
         `CURRENT FATES\n${live.length ? JSON.stringify(live.map(fateForPrompt)) : 'none yet'}`,
         secretsNow.length ? `AUTHOR'S NOTEBOOK (secrets of the locked fates, as the story stands)\n${secretsNow.map(v => `${v.id} [${v.layer}${v.revealed ? ', REVEALED' : ''}] ${v.text} | hidden from: ${v.unknownTo.join(', ') || 'nobody now'}${v.learned.length ? ` | found out: ${v.learned.join(', ')}` : ''} | clues planted: ${v.clues.length}${v.clues.length ? ` (last: ${v.clues[v.clues.length - 1].text})` : ''}`).join('\n')}` : '',
         pruned.length ? `DISCARDED FATES (do not bring them back as they were)\n${pruned.map(f => `${f.id}: ${f.truth}`).join('\n')}` : '',
-        `SEEDS (planted threads${omittedOpen || omittedPaid ? `; ${omittedOpen + omittedPaid} older ones not shown, ${omittedOpen} of them still open` : ''})\n${seeds.length ? seeds.map(x => `${x.id} [${x.kind}, planted in ${x.phase}${size.arcs && x.arc ? ` of act ${x.arc}` : ''}, ${x.status}${x.user ? ', added by the player: weigh it more' : ''}${x.fates?.length ? `, fates ${x.fates.join('/')}` : ''}]: ${x.text}`).join('\n') : 'none yet'}`,
+        `SEEDS (planted threads${omittedOpen || omittedPaid ? `; ${omittedOpen + omittedPaid} older ones not shown, ${omittedOpen} of them still open` : ''})\n${seeds.length ? seeds.map(x => `${x.id} [${x.kind}, planted in ${x.phase}${size.arcs && x.arc ? ` of act ${x.arc}` : ''}, ${x.status}${x.user ? ', added by the player: weigh it more' : x.pinned ? ', pinned by the player: weigh it more' : ''}${x.fates?.length ? `, fates ${x.fates.join('/')}` : ''}]: ${x.text}`).join('\n') : 'none yet'}`,
         `RECENT STORY\n${transcript}`,
         `TASK (reason for this pass: ${reason})\n${tasks.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n${storyLanguageHint()}\nAnswer with JSON only:\n{"fates":[…],"seedFates":{"s1":["A"]},"focus":["s1"],"beat":"…","pace":"keep","secrets":[],"arcSummary":""}`,
     ].filter(Boolean).join('\n\n');
@@ -444,6 +445,7 @@ async function runArchitect(reason) {
     });
     if (host.chatId() !== chatId || host.state() !== st) return;
     const res = applyArchitect(st, value, { at, prog, noRush: !!s.noRush });
+    markShown(st, seeds);
     if (usedBackup) host.diag(`architect used the backup API (${reason})`);
     if (res.blocked?.length) host.diag(`blocked ${res.blocked.length} fate(s) that broke a protection`);
     const after = progressOf(st, chat);

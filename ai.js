@@ -52,7 +52,8 @@ async function callOne(src, messages, maxTokens, timeoutMs, signal) {
         const timeout = new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`ไม่ตอบภายใน ${timeoutMs / 1000} วินาที`)), timeoutMs); });
         const stop = new Promise((_, rej) => signal?.addEventListener('abort', () => rej(new Error('หยุดแล้ว')), { once: true }));
         try {
-            return await Promise.race([c.generateRaw({ prompt: structuredClone(messages), responseLength: maxTokens }), timeout, stop]);
+            const text = await Promise.race([c.generateRaw({ prompt: structuredClone(messages), responseLength: maxTokens }), timeout, stop]);
+            return { text: String(text ?? ''), reasoning: '' };
         } finally { clearTimeout(timer); }
     }
     const svc = c.ConnectionManagerRequestService;
@@ -62,7 +63,8 @@ async function callOne(src, messages, maxTokens, timeoutMs, signal) {
     signal?.addEventListener('abort', () => ac.abort(), { once: true });
     try {
         const res = await svc.sendRequest(src, structuredClone(messages), maxTokens, { stream: false, signal: ac.signal, extractData: true, includePreset: true });
-        return typeof res === 'string' ? res : String(res?.content ?? '');
+        if (typeof res === 'string') return { text: res, reasoning: '' };
+        return { text: String(res?.content ?? ''), reasoning: String(res?.reasoning ?? '') };
     } catch (e) {
         if (signal?.aborted) throw new Error('หยุดแล้ว');
         if (ac.signal.aborted) throw new Error(`ไม่ตอบภายใน ${timeoutMs / 1000} วินาที`);
@@ -90,12 +92,19 @@ export async function ask({ role = 'other', source, backup = '', system, user, m
     const errors = [];
     for (const [i, src] of chain.entries()) {
         const label = sourceLabel(src);
+        let budget = maxTokens;
         for (let attempt = 0; attempt < 2; attempt++) {
             const t0 = Date.now();
             let out = '';
             try {
-                out = String(await callOne(src, messages, maxTokens, timeoutSec * 1000, signal) ?? '');
-                if (!out.trim()) throw Object.assign(new Error('ได้คำตอบว่าง (อาจโดน safety filter, โควต้าหมด หรือโมเดลคิดจนหมดโควต้าคำตอบ)'), { skip: true });
+                const got = await callOne(src, messages, budget, timeoutSec * 1000, signal);
+                out = got.text;
+                if (!out.trim() && got.reasoning.trim()) {
+                    // a thinking model spent the whole answer budget on its reasoning: same API, three times the room
+                    budget = Math.min(budget * 3, 16000);
+                    throw new Error(`โมเดลคิดจนหมดโควต้าคำตอบ (ลองใหม่ด้วย ${budget} token) · ถ้าเป็นบ่อย เพิ่ม "คำตอบสูงสุด" ในหน้าตั้งค่า`);
+                }
+                if (!out.trim()) throw Object.assign(new Error('ได้คำตอบว่าง (โควต้าหมด โดน filter หรือโมเดลคิดจนหมดโควต้าคำตอบ ถ้าเป็นโมเดลที่คิดก่อนตอบ ลองเพิ่ม "คำตอบสูงสุด" ในหน้าตั้งค่า)'), { skip: true });
                 if (looksLikeRefusal(out)) throw Object.assign(new Error('โมเดลปฏิเสธ (กำแพงศีลธรรมของโมเดล)'), { skip: true });
                 const value = accept(out);
                 countUsage(role, inChars, out.length, false);

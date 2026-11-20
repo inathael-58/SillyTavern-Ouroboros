@@ -393,3 +393,4 @@ body.reduced-motion #ouro_launcher i { animation: none !important; }
 .ouro-prot > b { flex: 1 1 100%; }
 .ouro-prot > .ouro-chips { flex: 1 1 0; min-width: 0; }
 .ouro-prot .ouro-chip { font-size: 0.8em; padding: 3px 10px; }
+.ouro-icon-btn.is-on { color: var(--ouro-accent-text); }

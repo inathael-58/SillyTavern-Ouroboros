@@ -340,7 +340,8 @@ ${statusLine()}
 function renderSeeds(st) {
     const c = chat();
     const seeds = liveSeeds(st, c);
-    const open = seeds.filter(s => s.status === 'open');
+    const open = seeds.filter(s => s.status === 'open' && !s.faded);
+    const faded = seeds.filter(s => s.status === 'open' && s.faded);
     const paid = seeds.filter(s => s.status === 'paid');
     const row = s => {
         const k = SEED_KINDS[normKind(s.kind)];
@@ -351,7 +352,8 @@ function renderSeeds(st) {
         const where = Number.isInteger(s.msgId) ? `#${s.msgId}` : s.carried ? 'ตอนก่อน' : s.backfill ? 'จากสรุป' : 'เพิ่มเอง';
         return `<li class="ouro-seed ${s.status === 'paid' ? 'is-paid' : ''}">
 <span class="ouro-seed-ic" title="${esc(k.label)}">${icon(k.icon)}</span>
-<div class="ouro-seed-main"><span>${esc(s.text)}</span><small>${esc(k.label)} · ${where} · ${esc(phaseInfo(s.phase).label)}${s.user ? ' · ' + icon('fa-star') + ' เพิ่มเอง' : ''}</small></div>
+<div class="ouro-seed-main"><span>${esc(s.text)}</span><small>${esc(k.label)} · ${where} · ${esc(phaseInfo(s.phase).label)}${s.user ? ' · ' + icon('fa-star') + ' เพิ่มเอง' : ''}${s.pinned ? ' · ' + icon('fa-thumbtack') + ' ปักหมุด' : ''}</small></div>
+${s.faded ? `<button class="ouro-btn ouro-small" data-act="seed-unfade" data-id="${s.id}">คืน</button>` : s.status === 'open' && !s.user ? `<button class="ouro-icon-btn ${s.pinned ? 'is-on' : ''}" data-act="seed-pin" data-id="${s.id}" title="${s.pinned ? 'เลิกปักหมุด' : 'ปักหมุด: ส่งให้ผู้ทอชะตาทุกครั้ง'}" aria-label="${s.pinned ? 'เลิกปักหมุด' : 'ปักหมุด'}" aria-pressed="${!!s.pinned}">${icon('fa-thumbtack')}</button>` : ''}
 <button class="ouro-icon-btn" data-act="seed-edit" data-id="${s.id}" title="แก้ไข" aria-label="แก้ไข">${icon('fa-pen')}</button>
 ${confirmBtn('seed-drop', icon('fa-trash'), 'ouro-icon-btn', `data-id="${s.id}" title="ลบ" aria-label="ลบ"`)}
 </li>`;
@@ -369,13 +371,14 @@ ${back}
   <h4>เพิ่มปมเอง</h4>
   <textarea class="ouro-input" data-field="new-seed" rows="2" placeholder="เช่น แหวนที่ {{user}} เก็บได้ในป่า"></textarea>
   <div class="ouro-row"><select class="ouro-input" data-field="new-kind">${kindOptions('object')}</select><button class="ouro-btn ouro-primary" data-act="seed-add">เพิ่ม</button></div>
-  <p class="ouro-hint">ปมที่เพิ่มเองมีน้ำหนักมากกว่าปกติ ผู้ทอชะตาจะพยายามหยิบมาใช้</p>
+  <p class="ouro-hint">ปมที่เพิ่มเองหรือปักหมุดไว้ (${icon('fa-thumbtack')}) ถูกส่งให้ผู้ทอชะตาทุกครั้ง ส่วนปมอื่นเวียนกันส่ง ปมเก่าจะวนกลับมาให้ผู้ทอชะตาพิจารณาทุกไม่กี่รอบ</p>
 </section>
 <section class="ouro-card">
   <h4>เปิดอยู่ <small>${open.length}</small></h4>
   ${open.length ? `<ul class="ouro-seeds">${open.map(row).join('')}</ul>` : empty('fa-seedling', 'ยังไม่มีปม', 'ปมจะถูกเก็บเองหลังบอทตอบ หรือเพิ่มเองด้านบน', `<button class="ouro-btn" data-act="scout">เก็บปมตอนนี้</button>`)}
 </section>
-${paid.length ? `<section class="ouro-card"><h4>เฉลยแล้ว <small>${paid.length}</small></h4><ul class="ouro-seeds">${paid.map(row).join('')}</ul></section>` : ''}`;
+${paid.length ? `<section class="ouro-card"><h4>เฉลยแล้ว <small>${paid.length}</small></h4><ul class="ouro-seeds">${paid.map(row).join('')}</ul></section>` : ''}
+${faded.length ? `<section class="ouro-card"><h4>จางไปแล้ว <small>${faded.length}</small></h4><p class="ouro-hint">ผู้ทอชะตาเห็นว่าเรื่องผ่านปมเหล่านี้ไปแล้ว จึงหยุดส่ง กด คืน ถ้ายังอยากให้กลับมา</p><ul class="ouro-seeds">${faded.map(row).join('')}</ul></section>` : ''}`;
 }
 
 const kindOptions = cur => Object.entries(SEED_KINDS).map(([id, k]) => `<option value="${id}" ${normKind(cur) === id ? 'selected' : ''}>${k.label}</option>`).join('');
@@ -633,6 +636,8 @@ function handle(act, btn) {
             ui.editing = null;
             return done();
         }
+        case 'seed-pin': { const s = st.seeds.find(x => x.id === id); if (s) s.pinned = !s.pinned; return done(); }
+        case 'seed-unfade': { const s = st.seeds.find(x => x.id === id); if (s) { s.faded = false; s.lastShown = -1; } return done(); }
         case 'seed-drop': { const s = st.seeds.find(x => x.id === id); if (s) s.status = 'dropped'; return done(); }
         // peeks
         case 'peek': {
