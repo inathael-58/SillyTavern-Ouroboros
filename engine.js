@@ -11,6 +11,7 @@ import {
     cleanMessage, parseJsonLoose, SEED_KINDS, secretsByTiming, backfillPlan, backfillUntil, backfillRef,
     applyScoutSecrets, activeSecrets, intensityOf, tonesFor, sameToneBirth, TONES,
     shapeOf, CANON, normProtected, PROTECT_RULES, onStageNames, breaksProtection,
+    seedsForArchitect, seedsForScout, pastLines,
 } from './lib.js';
 
 const LOG = '[Ouroboros]';
@@ -143,7 +144,7 @@ async function runScout() {
     if (!targets.length) return;
 
     const prog = progressOf(st, chat);
-    const open = liveSeeds(st, chat).filter(x => x.status === 'open');
+    const open = seedsForScout(st, chat);
     const from = Math.max(0, targets[0] - 1);
     const transcript = recentTranscript(chat, 6000, targets[targets.length - 1] + 1).split('\n\n').filter(l => Number(l.match(/^#(\d+)/)?.[1]) >= from).join('\n\n');
     const kinds = Object.keys(SEED_KINDS).join('|');
@@ -221,7 +222,7 @@ async function runBackfill() {
             const part = est.parts[i];
             status.progress = `${i + 1}/${est.parts.length}`;
             host.changed();
-            const open = liveSeeds(st, chat).filter(x => x.status === 'open');
+            const open = seedsForScout(st, chat);
             const body = part.kind === 'summary'
                 ? `STORY SUMMARIES (from earlier in this chat; "#a–b" are message numbers):\n${part.text}`
                 : `STORY TEXT (messages #${part.from}–#${part.to}):\n${recentTranscript(chat, 1e9, part.to + 1).split('\n\n').filter(l => Number(l.match(/^#(\d+)/)?.[1]) >= part.from).join('\n\n')}`;
@@ -336,7 +337,7 @@ async function runArchitect(reason) {
     const at = chat.length;
 
     const room = Object.fromEntries(lays.map(l => [l, spawnRoom(st, prog, l)]));
-    const seeds = liveSeeds(st, chat);
+    const { seeds, omittedOpen, omittedPaid } = seedsForArchitect(st, chat);
     const live = st.fates.filter(f => f.status === 'alive' || f.status === 'locked');
     const pruned = st.fates.filter(f => f.status === 'pruned' && f.cycle === st.cycle).slice(-8);
     const layerName = { main: 'main story', arc: `act ${st.arc.index}` };
@@ -376,8 +377,7 @@ async function runArchitect(reason) {
     ].filter(Boolean).join('\n');
 
     const past = [
-        ...st.past.map(p => `Earlier cycle ${p.cycle} ended with: ${p.truths.join(' / ')}`),
-        ...st.arc.summaries.map(a => `Act ${a.index} (finished): ${a.summary}`),
+        ...pastLines(st),
     ].join('\n');
 
     const mh = memoryHubBlock();
@@ -417,7 +417,7 @@ async function runArchitect(reason) {
         `CURRENT FATES\n${live.length ? JSON.stringify(live.map(fateForPrompt)) : 'none yet'}`,
         secretsNow.length ? `AUTHOR'S NOTEBOOK (secrets of the locked fates, as the story stands)\n${secretsNow.map(v => `${v.id} [${v.layer}${v.revealed ? ', REVEALED' : ''}] ${v.text} | hidden from: ${v.unknownTo.join(', ') || 'nobody now'}${v.learned.length ? ` | found out: ${v.learned.join(', ')}` : ''} | clues planted: ${v.clues.length}${v.clues.length ? ` (last: ${v.clues[v.clues.length - 1].text})` : ''}`).join('\n')}` : '',
         pruned.length ? `DISCARDED FATES (do not bring them back as they were)\n${pruned.map(f => `${f.id}: ${f.truth}`).join('\n')}` : '',
-        `SEEDS (planted threads)\n${seeds.length ? seeds.map(x => `${x.id} [${x.kind}, planted in ${x.phase}${size.arcs && x.arc ? ` of act ${x.arc}` : ''}, ${x.status}${x.user ? ', added by the player: weigh it more' : ''}${x.fates?.length ? `, fates ${x.fates.join('/')}` : ''}]: ${x.text}`).join('\n') : 'none yet'}`,
+        `SEEDS (planted threads${omittedOpen || omittedPaid ? `; ${omittedOpen + omittedPaid} older ones not shown, ${omittedOpen} of them still open` : ''})\n${seeds.length ? seeds.map(x => `${x.id} [${x.kind}, planted in ${x.phase}${size.arcs && x.arc ? ` of act ${x.arc}` : ''}, ${x.status}${x.user ? ', added by the player: weigh it more' : ''}${x.fates?.length ? `, fates ${x.fates.join('/')}` : ''}]: ${x.text}`).join('\n') : 'none yet'}`,
         `RECENT STORY\n${transcript}`,
         `TASK (reason for this pass: ${reason})\n${tasks.map((t, i) => `${i + 1}. ${t}`).join('\n')}\n${storyLanguageHint()}\nAnswer with JSON only:\n{"fates":[…],"seedFates":{"s1":["A"]},"focus":["s1"],"beat":"…","pace":"keep","secrets":[],"arcSummary":""}`,
     ].filter(Boolean).join('\n\n');

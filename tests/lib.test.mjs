@@ -9,6 +9,7 @@ import {
     mergeSecrets, applyScoutSecrets, activeSecrets, secretView,
     tonesFor, sameToneBirth, looksLikeRefusal, intensityOf,
     mainGateOpen, breaksProtection, normProtected, mergeThreads, onStageNames,
+    seedsForArchitect, seedsForScout, pastLines,
 } from '../lib.js';
 
 /** A chat of n visible messages, alternating user/bot, starting with a bot greeting. */
@@ -549,4 +550,51 @@ test('onStageNames reads speakers and lore titles in recent text', () => {
     const names = onStageNames(chat, ['Gojo', 'Sukuna', 'Megumin']);
     assert.ok(names.includes('Gojo') && names.includes('Megumin') && names.includes('Narrator'));
     assert.ok(!names.includes('Sukuna') && !names.includes('Kai'), 'absent lore and the player are left out');
+});
+
+// ---------------------------------------------------------------- v0.6.1: token budget
+
+test('the Architect gets at most 40 open seeds, the most useful first, and the newest paid ones', () => {
+    const st = newState({ size: 'long' });
+    const chat = chatOf(400);
+    for (let i = 0; i < 120; i++) addSeeds(st, [{ text: `ปมที่ ${i} ของเรื่องยาว` }], { msgId: i * 3 }, i < 10 ? 'setup' : 'rising');
+    addSeeds(st, [{ text: 'ปมที่ผู้เล่นเพิ่มเอง' }], { user: true }, 'rising');
+    st.fates.push({ id: 'A', layer: 'main', status: 'alive' });
+    st.seeds[50].fates = ['A'];
+    for (let i = 100; i < 110; i++) { st.seeds[i].status = 'paid'; st.seeds[i].paidBy = { msgId: 399, swipeId: 0 }; }
+    const r = seedsForArchitect(st, chat);
+    const open = r.seeds.filter(x => x.status === 'open');
+    assert.equal(open.length, 40);
+    assert.equal(r.seeds.filter(x => x.status === 'paid').length, 6);
+    assert.equal(r.omittedOpen, 111 - 40);
+    assert.equal(r.omittedPaid, 4);
+    const ids = new Set(r.seeds.map(x => x.text));
+    assert.ok(ids.has('ปมที่ผู้เล่นเพิ่มเอง'), "the player's own seed is always sent");
+    assert.ok(ids.has('ปมที่ 50 ของเรื่องยาว'), 'a seed tied to a living fate is sent');
+    assert.ok(ids.has('ปมที่ 0 ของเรื่องยาว'), 'setup seeds are kept for the ouroboros rule');
+    assert.ok(ids.has('ปมที่ 99 ของเรื่องยาว'), 'the newest open seeds fill the rest');
+    assert.ok(!ids.has('ปมที่ 20 ของเรื่องยาว'), 'an old, unattached seed waits');
+    assert.equal(st.seeds.length, 121, 'nothing is deleted');
+});
+
+test('the Scout dedupes against the newest 30 open seeds plus the player\'s own', () => {
+    const st = newState();
+    for (let i = 0; i < 50; i++) addSeeds(st, [{ text: `ปมเล็ก ${i}` }], { msgId: i }, 'rising');
+    addSeeds(st, [{ text: 'ของผู้เล่น' }], { user: true }, 'rising');
+    const list = seedsForScout(st, chatOf(60));
+    assert.equal(list.length, 30);
+    assert.ok(list.some(x => x.text === 'ของผู้เล่น'));
+    assert.ok(list.some(x => x.text === 'ปมเล็ก 49'));
+    assert.ok(!list.some(x => x.text === 'ปมเล็ก 0'));
+});
+
+test('old acts fold into one short line; recent acts stay in full', () => {
+    const st = newState({ size: 'epic' });
+    st.arc.summaries = Array.from({ length: 8 }, (_, i) => ({ index: i + 1, summary: `องก์ ${i + 1} จบลงด้วยเรื่องยาวมาก `.repeat(10) }));
+    const lines = pastLines(st);
+    assert.equal(lines.length, 4);
+    assert.match(lines[0], /^Acts 1–5 \(finished, in short\)/);
+    assert.ok(lines[0].length < 600);
+    assert.match(lines[3], /^Act 8 \(finished\)/);
+    assert.deepEqual(pastLines(newState()), []);
 });
