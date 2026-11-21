@@ -7,7 +7,7 @@
 import { ask } from './ai.js';
 import {
     SIZES, sizeOf, PHASES, phaseInfo, progressOf, lockPoint, layerProgress, layers, alive, lockedFate, spawnRoom,
-    liveSeeds, addSeeds, paySeeds, trimToChat, applyArchitect, advanceArc, countBotSince, recentTranscript,
+    liveSeeds, addSeeds, paySeeds, trimToChat, applyArchitect, advanceArc, countBotSince, recentTranscript, scoutBudget, moodTones,
     cleanMessage, parseJsonLoose, SEED_KINDS, secretsByTiming, backfillPlan, backfillUntil, backfillRef,
     applyScoutSecrets, activeSecrets, intensityOf, tonesFor, sameToneBirth, TONES,
     shapeOf, CANON, normProtected, PROTECT_RULES, onStageNames, breaksProtection,
@@ -157,7 +157,7 @@ async function runScout() {
     const prog = progressOf(st, chat);
     const open = seedsForScout(st, chat);
     const from = Math.max(0, targets[0] - 1);
-    const transcript = recentTranscript(chat, 6000, targets[targets.length - 1] + 1).split('\n\n').filter(l => Number(l.match(/^#(\d+)/)?.[1]) >= from).join('\n\n');
+    const transcript = recentTranscript(chat, scoutBudget(chat, targets), targets[targets.length - 1] + 1, from);
     const kinds = Object.keys(SEED_KINDS).join('|');
     const last = targets[targets.length - 1];
     // the secret notebook rides along in the same call: clues, who found out, reveals (and leaks)
@@ -244,7 +244,7 @@ async function runBackfill() {
             const open = seedsForScout(st, chat);
             const body = part.kind === 'summary'
                 ? `STORY SUMMARIES (from earlier in this chat; "#a–b" are message numbers):\n${part.text}`
-                : `STORY TEXT (messages #${part.from}–#${part.to}):\n${recentTranscript(chat, 1e9, part.to + 1).split('\n\n').filter(l => Number(l.match(/^#(\d+)/)?.[1]) >= part.from).join('\n\n')}`;
+                : `STORY TEXT (messages #${part.from}–#${part.to}):\n${recentTranscript(chat, 1e9, part.to + 1, part.from)}`;
             const user = [
                 open.length ? `OPEN THREADS ALREADY NOTED (id: text):\n${open.map(x => `${x.id}: ${x.text}`).join('\n')}` : 'OPEN THREADS ALREADY NOTED: none',
                 `PART ${i + 1} OF ${est.parts.length}, read in story order.\n${body}`,
@@ -394,7 +394,7 @@ async function runArchitect(reason) {
         shapeRules ? `Shape: ${shapeRules}` : '',
         `Intensity: ${intensity.architect}`,
         prot.length ? `PROTECTED CHARACTERS (no fate, twist or secret may break these): ${prot.map(p => `${p.name} (${Object.keys(PROTECT_RULES).filter(r => p[r]).map(r => ({ villain: 'never the villain', death: 'never dies', betray: 'never betrays' })[r]).join(', ')})`).join('; ')}` : '',
-        st.moods?.length ? `Wished moods: ${st.moods.join(', ')}` : 'Wished moods: none given.',
+        st.moods?.length ? `Wished moods: ${st.moods.join(', ')}${moodTones(st.moods).length ? ` (they favour ${moodTones(st.moods).join(' > ')} endings: score fates of the favoured tones higher; when the truth is chosen, code adds up to 15 points for this fit)` : ''}` : 'Wished moods: none given.',
         st.premise ? `Player's rough premise (an ingredient, not an order; fates may use or twist it): ${st.premise}` : '',
         st.tropes?.length ? `Tropes the player likes (ingredients): ${st.tropes.join(', ')}` : '',
         st.secretTropes?.picked?.length ? `Hidden tropes (the player chose to not know them; use them as ingredients): ${st.secretTropes.picked.map(p => p.trope).join(', ')}` : '',
