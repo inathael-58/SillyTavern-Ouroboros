@@ -711,3 +711,55 @@ test('apiErrorText shows the reason hidden in a Connection Manager error', async
     assert.equal(apiErrorText(new Error('ไม่ตอบภายใน 120 วินาที')), 'ไม่ตอบภายใน 120 วินาที');
     assert.equal(apiErrorText('plain'), 'plain');
 });
+
+// ---------------------------------------------------------------- long replies, long fates, moods
+
+test('recentTranscript keeps every paragraph of a message and starts at "from"', async () => {
+    const { recentTranscript, scoutBudget } = await import('../lib.js');
+    const chat = chatOf(6);
+    chat[4].mes = 'first paragraph\n\nsecond paragraph\n\nthird paragraph';
+    const t = recentTranscript(chat, 1e9, 5, 3);
+    assert.match(t, /^#3 /);
+    assert.match(t, /third paragraph/);
+    assert.doesNotMatch(t, /#2 /);
+    // a reply far longer than the old 6000-char window gets room, up to the cap
+    chat[5].mes = 'x'.repeat(20000);
+    assert.ok(scoutBudget(chat, [5]) > 20000);
+    assert.equal(scoutBudget(chat, [5], 6000, 10000), 10000);
+    assert.equal(scoutBudget(chat, [0]), 6000);
+});
+
+test('an over-long message keeps its start and its end', async () => {
+    const { recentTranscript } = await import('../lib.js');
+    const chat = chatOf(2);
+    chat[1].mes = 'START ' + 'm'.repeat(5000) + ' END';
+    const t = recentTranscript(chat, 1000, 2, 1);
+    assert.ok(t.length <= 1010);
+    assert.match(t, /START/);
+    assert.match(t, /END$/);
+});
+
+test('clipProse cuts long fate text at a sentence and marks it', async () => {
+    const { clipProse } = await import('../lib.js');
+    assert.equal(clipProse('Short truth.', 100), 'Short truth.');
+    const long = 'One sentence here. '.repeat(10) + 'A last one that runs past the limit';
+    const out = clipProse(long, 120);
+    assert.ok(out.length <= 120);
+    assert.match(out, /here\.…$/);
+    const st = newState({});
+    applyArchitect(st, { fates: [{ id: 'A', layer: 'main', truth: 'word '.repeat(400), ending: 'e', tone: 'bright', score: 60 }] }, { at: 1, prog: progressOf(st, chatOf(2)) });
+    assert.ok(st.fates[0].truth.endsWith('…'));
+    assert.ok(st.fates[0].truth.length <= 1200);
+});
+
+test('wished moods steer which fate becomes the truth', async () => {
+    const { moodBonus, moodTones, fateRank } = await import('../lib.js');
+    const moods = ['โรแมนติก', 'อบอุ่น'];
+    assert.ok(moodBonus(moods, 'bright') > moodBonus(moods, 'bittersweet'));
+    assert.ok(moodBonus(moods, 'dark') < 0);
+    assert.equal(moodBonus(['ลึกลับ'], 'dark'), 0);
+    assert.deepEqual(moodTones(moods), ['bright', 'bittersweet', 'dark']);
+    assert.deepEqual(moodTones(['หักมุมแรง']), []);
+    const st = { moods };
+    assert.ok(fateRank(st, { score: 65, tone: 'bright' }) > fateRank(st, { score: 68, tone: 'dark' }));
+});

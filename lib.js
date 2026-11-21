@@ -96,6 +96,34 @@ export const intensityOf = id => INTENSITY[id] ?? INTENSITY.real;
 export const TONES = Object.freeze({ bright: 'สดใส', bittersweet: 'ขมหวาน', dark: 'มืด' });
 export const normTone = t => (TONES[String(t ?? '').toLowerCase()] ? String(t).toLowerCase() : '');
 
+/** How well each wished mood suits each tone of ending (-1 … 1). Moods missing here (twists, mystery) favour no tone. */
+const MOOD_TONES = Object.freeze({
+    'มืด': { dark: 1, bittersweet: 0.5, bright: -1 },
+    'มีหวัง': { bright: 1, bittersweet: 0.5, dark: -1 },
+    'โศก': { bittersweet: 1, dark: 0.5, bright: -0.5 },
+    'อบอุ่น': { bright: 1, bittersweet: 0.3, dark: -1 },
+    'โรแมนติก': { bright: 0.7, bittersweet: 0.7, dark: -0.5 },
+    'ตลก': { bright: 1, bittersweet: 0, dark: -1 },
+});
+const MOOD_WEIGHT = 15;
+
+/** Points (-15 … 15) the player's wished moods add to a fate of this tone. */
+export function moodBonus(moods, tone) {
+    const fits = (moods ?? []).map(m => MOOD_TONES[m]).filter(Boolean).map(t => t[tone] ?? 0);
+    if (!tone || !fits.length) return 0;
+    return Math.round(MOOD_WEIGHT * fits.reduce((a, b) => a + b, 0) / fits.length);
+}
+
+/** The tones the wished moods favour, best first (empty when the moods favour none). */
+export function moodTones(moods) {
+    const tones = ['bright', 'bittersweet', 'dark'].map(t => [t, moodBonus(moods, t)]);
+    if (tones.every(([, b]) => b === 0)) return [];
+    return tones.sort((a, b) => b[1] - a[1]).map(([t]) => t);
+}
+
+/** A fate's rank for choosing the truth: the Architect's score plus the fit with the wished moods. */
+export const fateRank = (st, f) => (Number(f?.score) || 0) + moodBonus(st?.moods, f?.tone);
+
 /**
  * Tones to ask for when the Architect adds `room` fates to a layer: the intensity's list, skipping tones
  * the living fates of that layer already cover, so a respawn fills the gap.
@@ -527,6 +555,19 @@ export function nextFateId(st) {
 
 const strList = (v, max = 6) => (Array.isArray(v) ? v : v ? [v] : []).map(x => String(x ?? '').trim()).filter(Boolean).slice(0, max);
 const str = (v, max = 600) => String(v ?? '').trim().slice(0, max);
+/** Prose that may be long: cut at the end of a sentence (or at least a word) and mark the cut. */
+export function clipProse(v, max) {
+    const t = String(v ?? '').trim().replace(/\s+/g, ' ');
+    if (t.length <= max) return t;
+    const cut = t.slice(0, max - 1);
+    const ends = [...cut.matchAll(/[.!?。！？…"”'’)](?=\s)|[ๆฯ](?=\s)/g)].map(m => m.index + 1);
+    const sentence = ends.length ? ends[ends.length - 1] : -1;
+    const space = cut.lastIndexOf(' ');
+    const at = sentence >= max * 0.6 ? sentence : space >= max * 0.6 ? space : cut.length;
+    return cut.slice(0, at).trimEnd() + '…';
+}
+const TRUTH_MAX = 1200;
+const ENDING_MAX = 900;
 
 /** Mark a fate pruned and turn seeds that only it used into red herrings. */
 export function pruneFate(st, fate, at, reason) {
@@ -565,9 +606,9 @@ export function applyArchitect(st, out, { at, prog, noRush = false }) {
         const fate = st.fates.find(f => f.id === String(raw.id ?? '') && f.status !== 'pruned');
         if (fate) {
             // update an existing fate; a locked fate keeps its truth
-            if (fate.status !== 'locked' && raw.truth) fate.truth = str(raw.truth);
-            if (raw.twists) fate.twists = strList(raw.twists, 4);
-            if (raw.ending) fate.ending = str(raw.ending);
+            if (fate.status !== 'locked' && raw.truth) fate.truth = clipProse(raw.truth, TRUTH_MAX);
+            if (raw.twists) fate.twists = strList(raw.twists, 4).map(x => clipProse(x, 400));
+            if (raw.ending) fate.ending = clipProse(raw.ending, ENDING_MAX);
             if (raw.scent) fate.scent = str(raw.scent, 40);
             if (raw.shadow) fate.shadow = str(raw.shadow, 200);
             if (raw.needs) fate.needs = strList(raw.needs, 12);
@@ -592,7 +633,7 @@ export function applyArchitect(st, out, { at, prog, noRush = false }) {
             id, layer,
             arc: layer === 'arc' ? st.arc.index : null,
             cycle: st.cycle,
-            truth: str(raw.truth), twists: strList(raw.twists, 4), ending: str(raw.ending),
+            truth: clipProse(raw.truth, TRUTH_MAX), twists: strList(raw.twists, 4).map(x => clipProse(x, 400)), ending: clipProse(raw.ending, ENDING_MAX),
             scent: str(raw.scent, 40), shadow: str(raw.shadow, 200), needs: strList(raw.needs, 12), tone: normTone(raw.tone),
             harm: (Array.isArray(raw.harm) ? raw.harm : []).slice(0, 6).map(h => ({ name: str(h?.name, 60), role: str(h?.role, 20) })),
             score: Number.isFinite(Number(raw.score)) ? clamp(Math.round(Number(raw.score)), 0, 100) : 50,
@@ -789,7 +830,7 @@ export function lockIfDue(st, prog, layer, at) {
     const due = point != null && p >= point;
     const lastOne = live.length === 1 && p >= SPAWN_UNTIL && !st.cutPending;
     if (!due && !lastOne) return null;
-    const best = [...live].sort((a, b) => (b.score - a.score) || (a.bornAt - b.bornAt))[0];
+    const best = [...live].sort((a, b) => (fateRank(st, b) - fateRank(st, a)) || (a.bornAt - b.bornAt))[0];
     best.status = 'locked';
     best.lockedAt = at;
     for (const f of live) if (f !== best) pruneFate(st, f, at, 'อีกชะตาถูกเลือกเป็นความจริง');
@@ -971,21 +1012,38 @@ export function cleanMessage(text) {
         .trim();
 }
 
-/** Recent messages as "Name: text", newest last, within a character budget. */
-export function recentTranscript(chat, budgetChars, until = chat?.length ?? 0) {
+/** Keep the start and the end of a text that is too long (a reply's newest events are often at its end). */
+export function headTail(text, max) {
+    const t = String(text ?? '');
+    if (t.length <= max) return t;
+    const head = Math.floor(max * 0.6);
+    return `${t.slice(0, head)}\n…\n${t.slice(t.length - (max - head))}`;
+}
+
+/**
+ * Recent messages as "#i Name: text", newest last, within a character budget.
+ * `from` is the first message number to include (messages keep their own blank lines, so never split the result on them).
+ */
+export function recentTranscript(chat, budgetChars, until = chat?.length ?? 0, from = 0) {
     const lines = [];
     let used = 0;
-    for (let i = Math.min(until, chat?.length ?? 0) - 1; i >= 0; i--) {
+    for (let i = Math.min(until, chat?.length ?? 0) - 1; i >= Math.max(0, from); i--) {
         const m = chat[i];
         if (!visible(m)) continue;
         const t = cleanMessage(m.mes);
         if (!t) continue;
         const line = `#${i} ${m.name ?? (m.is_user ? 'User' : 'Bot')}: ${t}`;
         if (used + line.length > budgetChars && lines.length) break;
-        lines.push(line.length > budgetChars ? line.slice(0, budgetChars) : line);
+        lines.push(headTail(line, budgetChars));
         used += line.length;
     }
     return lines.reverse().join('\n\n');
+}
+
+/** Characters the live Scout needs to read the new messages whole (plus a little lead-in), within [min, max]. */
+export function scoutBudget(chat, targets, min = 6000, max = 32000) {
+    const need = (targets ?? []).reduce((n, i) => n + cleanMessage(chat?.[i]?.mes).length + 40, 0) + 1500;
+    return Math.max(min, Math.min(max, need));
 }
 
 /** Parse JSON from a model answer: fences, prose around it, trailing commas, smart quotes. */
