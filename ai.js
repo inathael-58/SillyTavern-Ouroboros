@@ -4,7 +4,7 @@
  * profile id. If the profile is gone, it falls back to 'main'.
  */
 
-import { looksLikeRefusal } from './lib.js';
+import { looksLikeRefusal, apiErrorText } from './lib.js';
 
 const ctx = () => SillyTavern.getContext();
 const LOG = '[Ouroboros]';
@@ -113,7 +113,7 @@ export async function ask({ role = 'other', source, backup = '', system, user, m
                 countUsage(role, inChars, out.length, true);
                 if (signal?.aborted) throw new Error('หยุดแล้ว');
                 console.warn(LOG, `${label} attempt ${attempt + 1} failed`, e);
-                if (attempt === 1 || (e.skip && chain.length > i + 1)) { errors.push(`${label}: ${e?.message ?? e}`); break; }
+                if (attempt === 1 || (e.skip && chain.length > i + 1)) { errors.push(`${label}: ${apiErrorText(e)}`); break; }
             }
         }
     }
