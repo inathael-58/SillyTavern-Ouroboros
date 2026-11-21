@@ -698,3 +698,16 @@ test('the writer gets the tensions of who is on stage (or the player), hottest f
     assert.match(t.split('\n')[1], /Lena is torn/, 'hottest first');
     assert.match(buildInjection(st, chat, undefined, { player: 'Kai' }), /Tensions in play/);
 });
+
+// ---------------------------------------------------------------- error text
+
+test('apiErrorText shows the reason hidden in a Connection Manager error', async () => {
+    const { apiErrorText } = await import('../lib.js');
+    const wrap = inner => new Error('API request failed', { cause: new Error(inner) });
+    assert.match(apiErrorText(wrap('Insufficient Balance')), /^API request failed: Insufficient Balance \(เครดิต/);
+    assert.match(apiErrorText(wrap('Authentication Fails, Your api key is invalid')), /API key ไม่ถูกต้อง/);
+    assert.match(apiErrorText(wrap('Response not OK')), /หาไม่เจอ/);
+    assert.equal(apiErrorText(wrap('something odd')), 'API request failed: something odd');
+    assert.equal(apiErrorText(new Error('ไม่ตอบภายใน 120 วินาที')), 'ไม่ตอบภายใน 120 วินาที');
+    assert.equal(apiErrorText('plain'), 'plain');
+});

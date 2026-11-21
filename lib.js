@@ -221,6 +221,35 @@ export function looksLikeRefusal(text) {
     return /\b(I can(?:not|'t|’t)|I(?:'m| am) (?:not able|unable)|I won(?:'t|’t)|cannot (?:help|assist|comply|continue)|can(?:'t|’t) (?:help|assist|comply|continue) with|against (?:my|the) (?:guidelines|policies|policy)|content polic(?:y|ies)|I'm sorry, but|I apologize, but)\b|ขออภัย[^\n]{0,40}(?:ไม่สามารถ|ไม่อาจ)|ไม่สามารถ(?:ช่วย|ดำเนินการ|เขียน)[^\n]{0,20}(?:ได้|นี้)/i.test(t);
 }
 
+/**
+ * Turn an error from a model call into one line a user can act on.
+ * SillyTavern's Connection Manager wraps every failure as "API request failed" and keeps the real reason
+ * in `cause`, so walk the chain and show the innermost message, with a hint for the common ones.
+ */
+export function apiErrorText(e) {
+    const msgs = [];
+    for (let x = e, n = 0; x && n < 6; x = x.cause, n++) {
+        const m = typeof x === 'string' ? x : x?.message ?? (x?.error?.message || '');
+        if (m && !msgs.includes(String(m))) msgs.push(String(m));
+    }
+    if (!msgs.length) return String(e ?? 'ไม่ทราบสาเหตุ');
+    const top = msgs[0];
+    const inner = msgs.length > 1 ? msgs[msgs.length - 1] : '';
+    const detail = inner || top;
+    const hints = [
+        [/^Response not OK$/i, 'เซิร์ฟเวอร์ ST ส่ง error กลับมาโดยไม่มีรายละเอียด มักเป็นเพราะ API key ของ profile นี้หาไม่เจอ: เปิด profile นี้ เลือก key ในช่อง API Key แล้วกดบันทึก profile (ไอคอนแผ่นดิสก์) อีกครั้ง'],
+        [/authentication|invalid api key|incorrect api key|unauthori[sz]ed|\b401\b/i, 'API key ไม่ถูกต้อง: เลือก key ใหม่ใน profile แล้วบันทึก profile'],
+        [/insufficient balance|insufficient_quota|\b402\b|billing|credit/i, 'เครดิตในบัญชี API หมด'],
+        [/rate.?limit|too many requests|\b429\b/i, 'ส่งถี่เกินไป รอสักครู่แล้วลองใหม่'],
+        [/overload|\b503\b|server busy/i, 'เซิร์ฟเวอร์ผู้ให้บริการไม่ว่าง ลองใหม่อีกครั้ง'],
+        [/max_tokens|maximum context|context length|too long/i, 'ข้อความยาวเกินหรือ "คำตอบสูงสุด" เกินที่โมเดลรับได้ ลองลด "เนื้อเรื่องที่ส่งให้ผู้ทอชะตา" หรือ "คำตอบสูงสุด" ในหน้าตั้งค่า'],
+        [/failed to fetch|networkerror|load failed/i, 'ต่อเซิร์ฟเวอร์ ST ไม่ได้ (เน็ตหลุดหรือ ST ปิดอยู่)'],
+    ];
+    const hint = hints.find(([re]) => re.test(detail))?.[1];
+    const base = inner ? `${top}: ${inner}` : top;
+    return hint ? `${base} (${hint})` : base;
+}
+
 /** Pick n secret tropes from the chosen categories (rand injectable for tests). */
 export function pickSecretTropes(categories, n = 2, rand = Math.random) {
     const pool = [];
