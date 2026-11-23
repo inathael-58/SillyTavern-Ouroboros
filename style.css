@@ -332,9 +332,17 @@ html.ouro-pal :where(#ouro_settings) :is(.text_pole, textarea, select, input:is(
     border-color: var(--ouro-p-line);
 }
 
-body.reduced-motion #ouro_overlay *, body.reduced-motion #ouro_overlay { animation: none !important; }
+body.reduced-motion #ouro_overlay *:not(.fa-spin), body.reduced-motion #ouro_overlay { animation: none !important; }
 @media (prefers-reduced-motion: reduce) {
-    #ouro_overlay, #ouro_overlay * { animation: none !important; }
+    #ouro_overlay, #ouro_overlay *:not(.fa-spin) { animation: none !important; }
+}
+/* A busy spinner is the only sign a job is still running: a still one reads as a hang.
+   It keeps turning under Reduced Motion (ST's setting and the OS one), just slower. Font Awesome
+   stops .fa-spin by itself under prefers-reduced-motion, hence ouro-spin and !important. */
+#ouro_overlay .is-busy .fa-spin { animation: ouro-spin 1s linear infinite !important; }
+body.reduced-motion #ouro_overlay .is-busy .fa-spin { animation-duration: 2.4s !important; }
+@media (prefers-reduced-motion: reduce) {
+    #ouro_overlay .is-busy .fa-spin { animation-duration: 2.4s !important; }
 }
 
 /* floating button: may stay see-through like other launchers; Quick Dock can take it in */
@@ -375,8 +383,8 @@ body.reduced-motion #ouro_overlay *, body.reduced-motion #ouro_overlay { animati
     background: var(--ouro-p-danger, var(--SmartThemeQuoteColor));
 }
 @keyframes ouro-spin { to { rotate: 360deg; } }
-body.reduced-motion #ouro_launcher i { animation: none !important; }
-@media (prefers-reduced-motion: reduce) { #ouro_launcher i { animation: none !important; } }
+body.reduced-motion #ouro_launcher[data-state="busy"] i { animation-duration: 3.2s; }
+@media (prefers-reduced-motion: reduce) { #ouro_launcher[data-state="busy"] i { animation-duration: 3.2s; } }
 
 /* the author's notebook inside a fully peeked, locked fate */
 .ouro-notebook { display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid var(--ouro-line); }
